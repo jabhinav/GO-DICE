@@ -1,4 +1,6 @@
-# -*- coding: utf-8 -*-
+import tensorflow as tf
+
+
 class Dict2(dict):
     def __init__(self, **kwargs):
         dict.__init__(self, kwargs)
@@ -11,32 +13,34 @@ training_data_config = Dict2(
     num_traj=100
 )
 
+dtype = tf.float32
 
 # Paths
-env_name = 'RoadWorld'  # RoadWorld, BoxWorld, TeamBoxWorld
+env_name = 'BoxWorld'  # RoadWorld, BoxWorld, TeamBoxWorld
 supervision_setting = "unsupervised"  # unsupervised, supervised
 latent_setting = 'static'  # static, dynamic
-model_name = 'InfoGAIL'  # BC(unsupervised), BC_InfoGAIL(supervised BC & unsupervised InfoGAIL), InfoGAIL, GAIL
+model_name = 'BC'  # BC(unsupervised, supervised), BC_InfoGAIL(unsupervised InfoGAIL), InfoGAIL, GAIL
 
-print "Env: {}, Latent_Supervision: {}, Latent_setting: {}, model: {}".format(env_name, supervision_setting,
-                                                                              latent_setting, model_name)
+# print("Env: {}, Latent_Supervision: {}, Latent_setting: {}, model: {}".format(env_name, supervision_setting,
+#                                                                               latent_setting, model_name))
 
 # Provide path to Data
 data_dir = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/training_data/{}'.format(env_name)
-if latent_setting == 'static':
-    state_action_path = data_dir + '/{}_stateaction_static.pkl'.format(env_name)
-    latent_path = data_dir + '/{}_latent_static.pkl'.format(env_name)
-else:
-    state_action_path = data_dir + '/{}_stateaction_dynamic.pkl'.format(env_name)
-    latent_path = data_dir + '/{}_latent_dynamic.pkl'.format(env_name)
+state_action_path = data_dir + '/{}_stateaction_{}.pkl'.format(env_name, latent_setting)
+latent_path = data_dir + '/{}_latent_{}.pkl'.format(env_name, latent_setting)
 
-InfoGAIL_pretrained_model_dir = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/pretrained_params/{}/params/{}/{}/{}/'.format(env_name, supervision_setting, latent_setting, 'BC_InfoGAIL')
-param_dir = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/pretrained_params/{}/params/{}/{}/{}/'.format(env_name, supervision_setting, latent_setting, model_name)
+InfoGAIL_pretrained_model_dir = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/pretrained_params/' \
+                                '{}/params/{}/{}/{}/'.format(env_name, supervision_setting, latent_setting,
+                                                             'BC_InfoGAIL')
+param_dir = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/pretrained_params/' \
+            '{}/params/{}/{}/{}/'.format(env_name, supervision_setting, latent_setting, model_name)
 # log_dir = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/pretrained_params/{}/logs/'.format(env_name)
 fig_name = '{}_loss'.format(model_name)
-fig_path = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/pretrained_params/{}/params/{}/{}/{}/{}'.format(env_name, supervision_setting, latent_setting, model_name, fig_name)
+fig_path = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/pretrained_params/{}/params/' \
+           '{}/{}/{}/{}'.format(env_name, supervision_setting, latent_setting, model_name, fig_name)
 
-kl_figpath = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/pretrained_params/{}/params/{}/{}/{}/'.format(env_name, supervision_setting, latent_setting, model_name)
+kl_figpath = '/Users/apple/Desktop/PhDCoursework/COMP641/InfoGAIL/pretrained_params/{}/params/' \
+             '{}/{}/{}/'.format(env_name, supervision_setting, latent_setting, model_name)
 
 
 """
@@ -70,10 +74,10 @@ InfoGAIL_config = Dict2(
     n_epochs=500,
     buffer_size=50,  # Maximum buffer size
     paths_per_collect=10,  # Paths to collect in each epoch (1st epoch we collect 30 paths)
-    max_step_limit=50,  # Enough for grid-sizes of 30, 25
+    max_step_limit=30,  # Enough for grid-sizes of 30, 25
     min_step_limit=5,  # Set it based on performance
-    sample_size=30,  # Paths from buffer used to train the model
-    batch_size=150,  # Batch size = num(s,a,c) tuples for training
+    sample_size=20,  # Paths from buffer used to train the model
+    batch_size=25,  # Batch size = num(s,a,c) tuples for training
     d_iter=10,  # Number of Discriminator iterations (not used from here, it is defined locally)
     lr_discriminator=5e-5,
     p_iter=50,  # Number of Posterior iterations
@@ -105,8 +109,9 @@ env_roadWorld_config = Dict2(
 
 # Define the Env Box World
 env_boxWorld_config = Dict2(
-    state_dim=2+2,  # Grid Position (x, y) and Binary indicator for whether M(=2) objects are collected i.e 1 for not collected
-    encode_dim=2*3,  # Urgency (0, 1) and Fatigue (0, 1, 2)
+    state_dim=2+2,  # Grid Position (x, y) and
+    # Binary indicator for whether M(=2) objects are collected i.e 1 for not collected
+    encode_dim=2*2,  # Urgency (0, 1) and Fatigue (0, 1, 2)
     action_dim=4,  # Up, Down, Right, Left
     grid_length_x=5,
     grid_length_y=5
@@ -138,4 +143,14 @@ env_bigTeamBoxWorld_config = Dict2(
     action_dim=4+4,  # (Up, Down, Right, Left) for agent, M(=4) actions to direct the robot towards an object or stay
     grid_length_x=10,
     grid_length_y=10
+)
+
+
+env_pickBoxWorld_config = Dict2(
+    n_objs=3,
+    state_dim=4+2*3,
+    encode_dim=3,
+    action_dim=4,  # Up, Down, Right, Left
+    grid_length_x=5,
+    grid_length_y=5
 )

@@ -1,106 +1,79 @@
-import numpy as np
-import tensorflow as tf
-import pickle as pkl
 import os
-import sys
-from models import Agent
-from domains import RoadWorld, BoxWorld, TeamBoxWorld
-from config import InfoGAIL_config as model_config
-from config import state_action_path, latent_path, env_name, seed_values, InfoGAIL_pretrained_model_dir
-from config import env_roadWorld_config, env_boxWorld_config, training_data_config, env_teamBoxWorld_config
-from utils import parse_data
-from config import param_dir as p_dir
+import logging
+import argparse
+from models.GoalGAIL import run
+
+logging.basicConfig(filename="./logs", filemode='w', format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+                    datefmt='%m/%d/%Y %H:%M:%S',
+                    level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-def run(exp_num, env, env_config, param_dir, finetune=0):
-    print("\n********** Experiment {} **********".format(exp_num))
-    state_dim = env_config.state_dim
-    encode_dim = env_config.encode_dim
-    action_dim = env_config.action_dim
-    # actions_one_hot_encoded = False
+def get_GoalGAIL_args():
+    parser = argparse.ArgumentParser()
 
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    sess = tf.Session(config=config)
-    from keras import backend as K
-    K.set_session(sess)
+    parser.add_argument('--exp_num', type=int, default=0)
 
-    # define the model
-    agent = Agent(env, sess, state_dim, action_dim, encode_dim, model_config)
+    # Specify Environment Configuration
+    parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
+    parser.add_argument('--full_space_as_goal', type=bool, default=False)
+    parser.add_argument('--two_object', type=bool, default=True)
+    parser.add_argument('--expert_behaviour', type=str, default='2', choices=['0', '1', '2'],
+                        help='Expert behaviour in two_object env')
+    parser.add_argument('--stacking', type=bool, default=False)
+    parser.add_argument('--target_in_the_air', type=bool, default=False,
+                        help='Is only valid in two object task')
 
-    # Load expert (state, action) pairs and G.T latent modes
-    print "Loading data"
-    with open(state_action_path, 'rb') as f:
-        trajectories = pkl.load(f)
-    with open(latent_path, 'rb') as f:
-        latent_modes_traj = pkl.load(f)
+    # Specify Data Collection Configuration
+    parser.add_argument('--horizon', type=int, default=150,
+                        help='Set 50 for one_obj, 100 for two_obj:0, two_obj:1 and 150 for two_obj:2')
+    parser.add_argument('--num_demos', type=int, default=100, help='Use 20 (expert pol)')
+    parser.add_argument('--collect_episodes', type=int, default=1, help='Use 1 (ddpg pol)')
+    parser.add_argument('--random_eps', type=float, default=0.3, help='% of time a random action is taken (ddpg pol)')
+    parser.add_argument('--noise_eps', type=float, default=0.15, help='std of gauss noise added to non-random actions '
+                                                                      'as a percentage of max_u (ddpg pol)')
 
-    # Retrieve demo for InfoGAIL (Get training data)
-    demo = parse_data(env, trajectories, latent_modes_traj, lower_bound=0, upper_bound=training_data_config.num_traj)
-    # print param_dir
-    # param_dir = os.path.join(param_dir, "params{}".format(exp_num))
-    param_dir = os.path.join(param_dir, "params{}".format(exp_num))
-    if not os.path.exists(param_dir):
-        os.makedirs(param_dir)
-    # Now load the weight
-    print("Now we load the weights")
-    try:
-        if finetune:
-            agent.generator.load_weights(param_dir + "/generator_model_37.h5")
-            agent.discriminator.load_weights(param_dir + "/discriminator_model_37.h5")
-            agent.baseline.model.load_weights(param_dir + "/baseline_model_37.h5")
-            agent.posterior.load_weights(param_dir + "/posterior_model_37.h5")
-            agent.posterior_target.load_weights(param_dir + "/posterior_target_model_37.h5")
-        else:
-            print "Picking Pre-trained BC model from", InfoGAIL_pretrained_model_dir + "generator_bc_model_{}.h5".format(exp_num)
-            agent.generator.load_weights(InfoGAIL_pretrained_model_dir + "generator_bc_model_{}.h5".format(exp_num))
-        print("Weight loaded successfully")
-    except:
-        print("Cannot find the weight")
+    # Specify Training configuration
+    parser.add_argument('--outer_iters', type=int, default=2, help='Use 1000')
+    parser.add_argument('--num_epochs', type=int, default=2, help='Use 5')
+    parser.add_argument('--num_cycles', type=int, default=2, help='Use 50')
+    parser.add_argument('--n_batches', type=int, default=2, help='Use 40')
+    parser.add_argument('--batch_size', type=int, default=96, help='Try 96/128/256')
+    parser.add_argument('--buffer_size', type=int, default=int(1e6), help='--')
+    parser.add_argument('--ac_iter', type=int, default=5)
+    parser.add_argument('--a_lr', type=float, default=4e-4)
+    parser.add_argument('--c_lr', type=float, default=3e-3)
+    parser.add_argument('--tau', type=float, default=0.005, help='soft update for target network')
 
-    print "Number of sample points from expert demos:", demo['states'].shape[0]
-    agent.learn(demo, param_dir, exp_num, verbose=0)
+    # Specify Discriminator Configuration
+    parser.add_argument('--n_batches_disc', type=int, default=20, help='Use 0 for bc/her else use 20')
+    parser.add_argument('--train_dis_per_rollout', type=bool, default=True)
+    parser.add_argument('--d_iter', type=int, default=10)
+    parser.add_argument('--d_lr', type=float, default=5e-4)
+    parser.add_argument('--rew_type', type=str, default='negative', choices=['negative', 'normalized', 'gail', 'airl'])
 
-    print("Finish.")
+    # Specify HER Transition/Transitional Data Sampling configuration
+    parser.add_argument('--relabel_for_policy', type=bool, default=True,
+                        help='True for gail_her, False ow')  # TODO: Implement the ow case
+    parser.add_argument('--replay_strategy', type=str, default='future')
+    parser.add_argument('--replay_k', type=int, default=4)
+    parser.add_argument('--gail_weight', type=float, default=0.1, help="the weight before gail reward")
+    parser.add_argument('--anneal_disc', type=bool, default=False, help='Whether to anneal disc. reward')
+    parser.add_argument('--two_rs', type=bool, default=False, help='set to True when anneal_disc is set to True')
+    parser.add_argument('--annealing_coeff', type=float, default=1., help='0.9 if her_bc else 1.')
+    parser.add_argument('--q_annealing', type=float, default=1.)
 
+    # Specify Policy configuration
+    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--lambda', type=float, default=0.95)
+    parser.add_argument('--relative_goals', type=bool, default=False)
+    parser.add_argument('--clip_obs', type=float, default=200.0)
 
-def run_multiple_runs():
-
-    if env_name == "BoxWorld":
-        env_config = env_boxWorld_config
-    elif env_name == "RoadWorld":
-        env_config = env_roadWorld_config
-    elif env_name == "TeamBoxWorld":
-        env_config = env_teamBoxWorld_config
-    else:
-        print "Specify a valid environment name in the config file"
-        sys.exit(-1)
-
-    # initialize the env
-    grid_length_y = env_config.grid_length_y
-    grid_length_x = env_config.grid_length_x
-    if env_name == "BoxWorld":
-        env = BoxWorld(grid_length_x=grid_length_x, grid_length_y=grid_length_y)
-    elif env_name == "RoadWorld":
-        env = RoadWorld(grid_length_x=grid_length_x, grid_length_y=grid_length_y)
-    elif env_name == "TeamBoxWorld":
-        env = TeamBoxWorld(grid_length_x=grid_length_x, grid_length_y=grid_length_y)
-    else:
-        print "Specify a valid environment name in the config file"
-        sys.exit(-1)
-
-    # For averaging across different runs
-    for exp_num, seed_value in enumerate(seed_values):
-
-        if exp_num < 9:
-            continue
-        # Set a seed value
-        np.random.seed(seed_value)
-        tf.set_random_seed(seed_value)
-
-        # Run multiple experiments
-        run(exp_num, env, env_config, param_dir=p_dir)
+    args = parser.parse_args()
+    return args
 
 
 if __name__ == "__main__":
-    run_multiple_runs()
+    args = get_GoalGAIL_args()
+    store_data_at = os.path.join(os.getcwd(), 'pnp_data/two_obj_fickle_start.pkl')
+    run(args, store_data_path=store_data_at)

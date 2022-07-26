@@ -17,7 +17,7 @@ class MDP:
   """Abstract MDP class."""
   __metaclass__ = abc.ABCMeta
 
-  def __init__(self, fast_cache_mode):
+  def __init__(self, fast_cache_mode: bool = False):
     """Initializes MDP class.
 
       Args:
@@ -138,7 +138,7 @@ class MDP:
         'Encountered mismatch in the size of the action space.')
 
   @abc.abstractmethod
-  def transition_model(self, state_idx, action_idx):
+  def transition_model(self, state_idx: int, action_idx: int) -> np.ndarray:
     """Defines MDP transition function.
 
       Args:
@@ -154,7 +154,7 @@ class MDP:
     return np_next_p_state_idx  # noqa: F821
 
   @property
-  def np_transition_model(self):
+  def np_transition_model(self) -> np.ndarray:
     """Returns transition model as a np ndarray."""
 
     # If already computed, return the computed value.
@@ -184,7 +184,7 @@ class MDP:
           )
     return self._np_transition_model
 
-  def transition(self, state_idx, action_idx):
+  def transition(self, state_idx: int, action_idx: int) -> int:
     """Samples next state using the MDP transition function / model.
 
     Args:
@@ -202,7 +202,7 @@ class MDP:
     return int(next_state_idx)
 
   @abc.abstractmethod
-  def reward(self, state_idx, action_idx):
+  def reward(self, state_idx: int, action_idx: int) -> float:
     """Defines MDP reward function.
 
       Args:
@@ -230,7 +230,7 @@ class MDP:
     return self._np_reward_model
 
 
-def v_value_from_q_value(q_value):
+def v_value_from_q_value(q_value: np.ndarray) -> np.ndarray:
   """Computes V values given Q values.
 
   Args:
@@ -244,11 +244,11 @@ def v_value_from_q_value(q_value):
 
 
 def q_value_from_v_value(
-    v_value,
-    transition_model,
-    reward_model,
-    discount_factor = 0.95,
-):
+    v_value: np.ndarray,
+    transition_model: np.ndarray,
+    reward_model: np.ndarray,
+    discount_factor: float = 0.95,
+) -> np.ndarray:
   """Computes V values given a policy.
 
   Args:
@@ -267,14 +267,14 @@ def q_value_from_v_value(
 
 
 def v_value_from_policy(
-    policy,
-    transition_model,
-    reward_model,
-    discount_factor = 0.95,
-    max_iteration = 20,
-    epsilon = 1e-6,
-    v_value_initial = None,
-):
+    policy: np.ndarray,
+    transition_model: np.ndarray,
+    reward_model: np.ndarray,
+    discount_factor: float = 0.95,
+    max_iteration: int = 20,
+    epsilon: float = 1e-6,
+    v_value_initial: Optional[np.ndarray] = None,
+) -> np.ndarray:
   """Computes V values given a policy.
 
   Args:
@@ -320,14 +320,14 @@ def v_value_from_policy(
 
 
 def q_value_from_policy(
-    policy,
-    transition_model,
-    reward_model,
-    discount_factor = 0.95,
-    max_iteration = 20,
-    epsilon = 1e-6,
-    v_value_initial = None,
-):
+    policy: np.ndarray,
+    transition_model: np.ndarray,
+    reward_model: np.ndarray,
+    discount_factor: float = 0.95,
+    max_iteration: int = 20,
+    epsilon: float = 1e-6,
+    v_value_initial: Optional[np.ndarray] = None,
+) -> np.ndarray:
   """Computes V values given a policy.
 
   Args:
@@ -363,7 +363,7 @@ def q_value_from_policy(
   return q_value
 
 
-def deterministic_policy_from_q_value(q_value):
+def deterministic_policy_from_q_value(q_value: np.ndarray) -> np.ndarray:
   """Computes a deterministic policy given Q values.
 
   Args:
@@ -376,8 +376,8 @@ def deterministic_policy_from_q_value(q_value):
   return q_value.argmax(axis=-1)
 
 
-def softmax_policy_from_q_value(q_value,
-                                temperature = 1.):
+def softmax_policy_from_q_value(q_value: np.ndarray,
+                                temperature: float = 1.) -> np.ndarray:
   """Computes a stochastic softmax policy given Q values.
 
   Args:

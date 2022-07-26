@@ -9,9 +9,9 @@ class StateSpace:
   """Defines a state space."""
   def __init__(
       self,
-      statespace = None,
-      idx_to_state = None,
-      state_to_idx = None,
+      statespace: Optional[Set] = None,
+      idx_to_state: Optional[Dict] = None,
+      state_to_idx: Optional[Dict] = None,
   ):
     """Initializes a state space.
 
@@ -48,8 +48,8 @@ class NpStateSpace:
   """Defines a state space using numpy."""
   def __init__(
       self,
-      np_idx_to_state,
-      np_state_to_idx,
+      np_idx_to_state: np.ndarray,
+      np_state_to_idx: np.ndarray,
   ):
     """Initializes state space using numpy.
 
@@ -67,9 +67,9 @@ class ActionSpace:
   """Defines an action space."""
   def __init__(
       self,
-      actionspace = None,
-      idx_to_action = None,
-      action_to_idx = None,
+      actionspace: Optional[Set] = None,
+      idx_to_action: Optional[Dict] = None,
+      action_to_idx: Optional[Dict] = None,
   ):
     """Initializes an action space.
 
@@ -106,8 +106,8 @@ class NpActionSpace:
   """Defines an action space using numpy."""
   def __init__(
       self,
-      np_idx_to_action,
-      np_action_to_idx,
+      np_idx_to_action: np.ndarray,
+      np_action_to_idx: np.ndarray,
   ):
     """Initializes action space using numpy.
 

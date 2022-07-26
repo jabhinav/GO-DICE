@@ -8,17 +8,18 @@ from typing import Optional
 
 import numpy as np
 from tqdm import tqdm
+
 import np_mdp.models.mdp as mdp_lib
 
 
 def value_iteration(
-    transition_model,
-    reward_model,
-    discount_factor = 0.95,
-    max_iteration = 20,
-    epsilon = 1e-6,
-    v_value_initial = None,
-):
+    transition_model: np.ndarray,
+    reward_model: np.ndarray,
+    discount_factor: float = 0.95,
+    max_iteration: int = 20,
+    epsilon: float = 1e-6,
+    v_value_initial: Optional[np.ndarray] = None,
+) -> np.ndarray:
   """Implements the value iteration algorithm.
 
   Args:
@@ -39,7 +40,7 @@ def value_iteration(
         "Initial V value has incorrect shape.")
     v_value = v_value_initial
   else:
-    v_value = np.zeros(num_states)
+    v_value = np.zeros((num_states))
 
   iteration_idx = 0
   delta_v = epsilon + 1.
@@ -59,13 +60,13 @@ def value_iteration(
 
 
 def policy_iteration(
-    transition_model,
-    reward_model,
-    discount_factor,
-    max_iteration,
-    epsilon,
-    policy_initial = None,
-    v_value_initial = None,
+    transition_model: np.ndarray,
+    reward_model: np.ndarray,
+    discount_factor: float = 0.95,
+    max_iteration: int = 20,
+    epsilon: float = 1e-6,
+    policy_initial: Optional[np.ndarray] = None,
+    v_value_initial: Optional[np.ndarray] = None,
 ):
   """Implements the policy iteration algorithm.
 
@@ -114,4 +115,4 @@ def policy_iteration(
     iteration_idx += 1
   progress_bar.close()
 
-  return policy, v_value, q_value
+  return (policy, v_value, q_value)

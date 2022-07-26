@@ -5,7 +5,7 @@ from typing import Text
 import numpy as np
 
 
-def read_from_memmap(np_variable, path):
+def read_from_memmap(np_variable: np.ndarray, path: Text) -> np.ndarray:
   """Reads numpy variable from a memory-map.
 
   Args:
@@ -22,7 +22,7 @@ def read_from_memmap(np_variable, path):
                    shape=np_variable.shape)
 
 
-def save_to_memmap(np_variable, path):
+def save_to_memmap(np_variable: np.ndarray, path: Text):
   """Saves numpy variable to a memory-map.
 
   Args:
