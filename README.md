@@ -10,8 +10,10 @@ Each dataset is in the form of a dictionary saved as a pickle file. The dictiona
 The PnP Environments and Expert Policies are located in `domains/PnP.py`.
 How to access these environments:-
 from domains.PnP import MyPnPEnvWrapperForGoalGAIL
+
 `one_obj_env = MyPnPEnvWrapperForGoalGAIL(full_space_as_goal=False, two_obj=False,
                                          stacking=False, target_in_the_air=True)
 two_obj_env = MyPnPEnvWrapperForGoalGAIL(full_space_as_goal=False, two_obj=True,
                                          stacking=False, target_in_the_air=False)`
+                                         
 Stick to this environment initialisation for now! You can look at the code of `MyPnPEnvWrapperForGoalGAIL` to see what the methods `reset()` and `step()` returns since I have used a wrapper around off-the-shelf Gym environments.
