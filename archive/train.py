@@ -53,7 +53,7 @@ def run(exp_num, env, env_config, param_dir, finetune=0):
         print("Cannot find the weight")
 
     print("Number of sample points from expert demos:", demo['states'].shape[0])
-    agent.train(demo, param_dir, exp_num, verbose=0)
+    agent.run(demo, param_dir, exp_num, verbose=0)
 
     print("Finish.")
 

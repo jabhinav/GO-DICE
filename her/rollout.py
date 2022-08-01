@@ -47,6 +47,7 @@ class RolloutWorker:
         self.render = render
         self.init_state = None
 
+    @tf.function
     def reset_rollout(self, reset=True):
         """
             Resets the `i`-th rollout environment, re-samples a new goal, and updates the `initial_o`
@@ -67,7 +68,7 @@ class RolloutWorker:
 
         return curr_state, curr_ag, curr_g
 
-    # @tf.function
+    @tf.function
     def generate_rollout(self, reset=True, slice_goal=None, compute_Q=False):
 
         # generate episodes
@@ -81,7 +82,10 @@ class RolloutWorker:
         # Initialize the environment
         curr_state, curr_ag, curr_g = self.reset_rollout(reset=reset)
 
-        for t in tf.range(self.horizon):
+        # Initialise other variables that will be computed
+        action, value = tf.zeros(shape=(self.env.action_space.shape[0],)), tf.zeros(shape=(1,))
+
+        for t in range(self.horizon):
 
             # Convert state into a batched tensor (batch size = 1)
             curr_state = tf.reshape(curr_state, shape=(1, -1))

@@ -3,7 +3,7 @@ import pickle as pkl
 import gym
 import numpy as np
 from utils.misc import one_hot_encode
-from utils.mpi import normalizer
+from utils.mpi import Normalizer
 
 
 def get_env_params(env):

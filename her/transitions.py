@@ -1,5 +1,8 @@
 import logging
+import sys
+
 import numpy as np
+import tensorflow as tf
 
 logger = logging.getLogger(__name__)
 
@@ -121,25 +124,36 @@ def make_sample_her_transitions(replay_strategy, replay_k, reward_fun=None, env=
         # -------------------------------------------------------------------------------------------------------------
         # ------------------------ 5) Re-compute reward since we may have substituted the goal ------------------------
         # Here we will actually reward those transitions which achieved some goal in hindsight
-        completion_rew = transitions['successes'] * env.goal_weight
+        completion_rew = tf.cast(transitions['successes'] * env.goal_weight, tf.float32)
+        # completion_rew = tf.reshape(completion_rew, (-1, 1))
+
         if discriminator is not None and gail_weight != 0.:
 
-            disc_rew = gail_weight * np.clip((discriminator.get_reward(transitions['states'], transitions['goals'],
-                                                                       transitions['actions'])),
-                                             -dis_bound, dis_bound).reshape(-1)
+            disc_rew = discriminator.get_reward(transitions['states'], transitions['goals'], transitions['actions'])
+            disc_rew = gail_weight * tf.clip_by_value(disc_rew, -dis_bound, dis_bound)
+            disc_rew = tf.squeeze(disc_rew, axis=1)
 
             if two_rs:
-                transitions['rd'] = disc_rew
-                transitions['r'] = completion_rew
+                transitions['rewards_disc'] = disc_rew
+                transitions['rewards'] = completion_rew
 
             else:
-                transitions['r'] = disc_rew + completion_rew
+                transitions['rewards'] = disc_rew + completion_rew
         else:
-            transitions['r'] = completion_rew
+            transitions['rewards'] = completion_rew
 
-        transitions = {k: transitions[k].reshape(batch_size, *transitions[k].shape[1:])
-                       for k in transitions.keys()}
-        assert (transitions['actions'].shape[0] == batch_size_in_transitions)
+        transitions = {
+            k: tf.reshape(tf.cast(transitions[k], dtype=tf.float32), shape=(batch_size, *transitions[k].shape[1:]))
+            for k in transitions.keys()
+        }
+
+        # transitions = {k: transitions[k].reshape(batch_size, *transitions[k].shape[1:])
+        #                for k in transitions.keys()}
+        try:
+            assert (transitions['actions'].shape[0] == batch_size_in_transitions)
+        except AssertionError:
+            logger.error("Something wrong in sampling HER transitions. Check|")
+            sys.exit(-1)
 
         return transitions
 

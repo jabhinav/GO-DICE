@@ -2,6 +2,7 @@ import time
 import numpy as np
 from typing import Tuple
 import collections
+import tensorflow as tf
 
 ACTION_TO_LATENT_MAPPING = {
     'pick:obj0': 1,
@@ -195,27 +196,28 @@ class MyPnPEnvWrapperForGoalGAIL(PnPEnv):
         return obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32), \
                np.array(success, np.int32)
 
-    def reward_fn(self, ag_2, g, o):
-        if self.relative_goal:
+    def reward_fn(self, ag_2, g, o, relative_goal=False, distance_metric='L1', only_feasible=False,
+                  extend_dist_rew_weight=0.):
+        if relative_goal:
             dif = o[:, -2:]
         else:
             dif = ag_2 - g
-        if self.distance_metric == 'L1':
+        if distance_metric == 'L1':
             goal_distance = np.linalg.norm(dif, ord=1, axis=-1)
-        elif self.distance_metric == 'L2':
+        elif distance_metric == 'L2':
             goal_distance = np.linalg.norm(dif, ord=2, axis=-1)
-        elif callable(self.distance_metric):
-            goal_distance = self.distance_metric(ag_2, g)
+        elif callable(distance_metric):
+            goal_distance = distance_metric(ag_2, g)
         else:
             raise NotImplementedError('Unsupported distance metric type.')
 
-        if self.only_feasible:
+        if only_feasible:
             ret = np.logical_and(goal_distance < self.terminal_eps, [self.is_feasible(g_ind) for g_ind in
                                                                      g]) * self.goal_weight - \
-                  self.extend_dist_rew_weight * goal_distance
+                  extend_dist_rew_weight * goal_distance
         else:
             ret = (goal_distance < self.terminal_eps) * self.goal_weight - \
-                  self.extend_dist_rew_weight * goal_distance
+                  extend_dist_rew_weight * goal_distance
 
         return ret
 
@@ -229,19 +231,13 @@ class PnPExpert:
         self.reset()
 
     def act(self, state, achieved_goal, goal, noise_eps=0., random_eps=0., **kwargs):  # only support one observation
-        a, action_type = self.get_action(state[0])
-        # print(action_type)
-        latent_mode = np.array([ACTION_TO_LATENT_MAPPING[action_type]])
+        # a, latent_mode = self.get_action(state[0])
+        # a = self.add_noise_to_action(a, noise_eps, random_eps)
 
-        a = np.array([a])
-        noise = noise_eps * np.random.randn(*a.shape)  # gaussian noise
-        a += noise
-        a = np.clip(a, -1, 1)
-        a += np.random.binomial(1, random_eps, a.shape[0]).reshape(-1, 1) * (self._random_action(a.shape[0]) - a)
-        if a.shape[0] == 1:
-            return a[0]
-        else:
-            return a
+        a, latent_mode = tf.numpy_function(func=self.get_action, inp=[state[0]], Tout=[tf.float32, tf.float32])
+        a = tf.numpy_function(func=self.add_noise_to_action, inp=[a, noise_eps, random_eps], Tout=tf.float32)
+        a = tf.squeeze(a)
+        return a
 
     def get_action(self, o):
         gripper_pos = o[:3]
@@ -263,7 +259,7 @@ class PnPExpert:
             self.block0_picked = True
             ac, ac_type = self.goto_goal(block_pos, goal_pos)
 
-        return ac, ac_type
+        return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.float32)
 
     def reset(self):
         #  # Hack: This flag helps bypass the irregular behaviour i.e. when block is picked and
@@ -275,7 +271,7 @@ class PnPExpert:
     def goto_block(self, cur_pos, block_pos):
         target_pos = block_pos + np.array([0, 0, 0.03])
         ac = clip_action((target_pos - cur_pos) * self.step_size)
-        ac = np.concatenate([ac, np.array([1])])
+        ac = np.concatenate([ac, np.array([1])], dtype=np.float32)
         ac_type = 'pick:obj0'
         # print(" [[Goto Block]]: ", ac)
         return ac, ac_type
@@ -284,12 +280,12 @@ class PnPExpert:
         block_rel_pos = block_pos - cur_pos
 
         if np.linalg.norm(block_rel_pos) < 0.01:
-            ac = np.array([0, 0, 0, -1.])
+            ac = np.array([0, 0, 0, -1.], dtype=np.float32)
             ac_type = 'stay'
             # print(" [[Pick (keep holding) Block]]: ", ac)
         else:
             ac = clip_action(block_rel_pos * self.step_size)
-            ac = np.concatenate([ac, np.array([-0.005])])
+            ac = np.concatenate([ac, np.array([-0.005])], dtype=np.float32)
             # print(" [[Pick (sub goto) Block]]: ", ac)
             ac_type = 'pick:obj0'
         return ac, ac_type
@@ -297,14 +293,22 @@ class PnPExpert:
     def goto_goal(self, cur_pos, goal_pos, grip=-1.):
         if np.linalg.norm((goal_pos - cur_pos)) > 0.01:
             ac = clip_action((goal_pos - cur_pos) * self.step_size)
-            ac = np.concatenate([ac, np.array([grip])])
+            ac = np.concatenate([ac, np.array([grip])], dtype=np.float32)
             # print(" [[Goto Goal]]: ", ac)
             ac_type = 'drop:obj0'
         else:
-            ac = np.array([0, 0, 0, grip])
+            ac = np.array([0, 0, 0, grip], dtype=np.float32)
             # print(" [[Stay]]: ", ac)
             ac_type = 'stay'
         return ac, ac_type
+
+    def add_noise_to_action(self, a, noise_eps=0., random_eps=0.,):
+        a = np.array([a])
+        noise = noise_eps * np.random.randn(*a.shape)  # gaussian noise
+        a += noise
+        a = np.clip(a, -1, 1)
+        a += np.random.binomial(1, random_eps, a.shape[0]).reshape(-1, 1) * (self._random_action(a.shape[0]) - a)
+        return a
 
     def _random_action(self, n):
         return np.random.uniform(low=-1, high=1, size=(n, 4))
@@ -327,23 +331,14 @@ class PnPExpertTwoObj:
         self.reset()
 
     def act(self, state, achieved_goal, goal, noise_eps=0., random_eps=0.,
-            **kwargs):  # only support one observation
+            **kwargs):  # only supports one observation
 
-        a, action_type = self.get_action(state[0])
-        # print(action_type)
-        latent_mode = np.array([ACTION_TO_LATENT_MAPPING[action_type]])
+        a, latent_mode = tf.numpy_function(func=self.get_action, inp=[state[0]], Tout=[tf.float32, tf.float32])
+        a = tf.numpy_function(func=self.add_noise_to_action, inp=[a, noise_eps, random_eps], Tout=tf.float32)
+        a = tf.squeeze(a)
+        return a
 
-        a = np.array([a])
-        noise = noise_eps * np.random.randn(*a.shape)  # gaussian noise
-        a += noise
-        a = np.clip(a, -1, 1)
-        a += np.random.binomial(1, random_eps, a.shape[0]).reshape(-1, 1) * (self._random_action(a.shape[0]) - a)
-        if a.shape[0] == 1:
-            return a[0]
-        else:
-            return a
-
-    def get_action(self, o) -> Tuple[np.ndarray, str]:
+    def get_action(self, o) -> Tuple[np.ndarray, np.ndarray]:
         time.sleep(0.01)
 
         gripper_pos = o[:3]
@@ -363,14 +358,14 @@ class PnPExpertTwoObj:
             switch = True if np.random.uniform(0, 1) < self.switch_prob else False
 
         if switch:
-            print("<---------------> Switching")
+            # print("<---------------> Switching")
 
             self.num_do_switch -= 1
 
             # Case 1: When none of the blocks have been sent towards their goal
             if not self.block1_picked and not self.block0_picked:
 
-                print("Case1: None Pick")
+                # print("Case1: None Pick")
 
                 if self.picking_order == 'zero_first':
                     self.picking_order = 'one_first'
@@ -379,18 +374,18 @@ class PnPExpertTwoObj:
 
                 # Check if gripper is holding any block (we set block_picked after a block is gripped)
                 if np.linalg.norm(relative_block_pos0) < 0.01:
-                    print("Release Block 0")
+                    # print("Release Block 0")
                     # Action = RELEASE
-                    ac = np.array([gripper_pos[0], gripper_pos[1], 1., 1.])
+                    ac = np.array([gripper_pos[0], gripper_pos[1], 1., 1.], dtype=np.float32)
                     ac_type = 'pick:obj1'
-                    return ac, ac_type
+                    return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.float32)
 
                 elif np.linalg.norm(relative_block_pos1) < 0.01:
-                    print("Release Block 1")
+                    # print("Release Block 1")
                     # Action = RELEASE
-                    ac = np.array([gripper_pos[0], gripper_pos[1], 1., 1.])
+                    ac = np.array([gripper_pos[0], gripper_pos[1], 1., 1.], dtype=np.float32)
                     ac_type = 'pick:obj0'
-                    return ac, ac_type
+                    return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.float32)
 
         def deal_with_block(block_pos, relative_block_pos, current_goal_block, block_picked, tempGoal_reached):
             if np.linalg.norm(relative_block_pos) > 0.1 \
@@ -404,7 +399,7 @@ class PnPExpertTwoObj:
                 if not tempGoal_reached:
                     sub_goal = np.concatenate([block_pos[:2], np.array([self.sub_goal_height])])
                     _ac = clip_action((sub_goal - block_pos) * self.step_size)
-                    _ac = np.concatenate([_ac, np.array([-1])])
+                    _ac = np.concatenate([_ac, np.array([-1])], dtype=np.float32)
 
                     if np.linalg.norm((sub_goal - block_pos)) < 0.05:  # Use distance thresh of FetchEnv
                         tempGoal_reached = True
@@ -431,7 +426,7 @@ class PnPExpertTwoObj:
                 #     else:
                 #         ac = self.goto_goal(gripper_pos, self.env.current_goal[:3], grip=1)
                 # else:
-                ac = np.array([0., 0., 0., -1.])
+                ac = np.array([0., 0., 0., -1.], dtype=np.float32)
                 ac_type = 'stay'
 
             # Deal with block 1
@@ -439,7 +434,7 @@ class PnPExpertTwoObj:
 
                 if np.linalg.norm(relative_block_pos0) < 0.1 and np.linalg.norm(relative_block_pos0[:2]) < 0.02:
                     # print(" [[Move up]] ")  # Moving up before going towards next block
-                    ac = np.array([0, 0, 1., 1.])
+                    ac = np.array([0, 0, 1., 1.], dtype=np.float32)
                     ac_type = 'pick:obj1'
                 else:
                     # print(" [[PnP Block1]] ")
@@ -472,14 +467,14 @@ class PnPExpertTwoObj:
                 #     else:
                 #         ac = self.goto_goal(gripper_pos, self.env.current_goal[:3], grip=1)
                 # else:
-                ac = np.array([0., 0., 0., -1.])
+                ac = np.array([0., 0., 0., -1.], dtype=np.float32)
                 ac_type = 'stay'
 
             # Deal with block 0
             elif np.linalg.norm(block_pos1 - current_goal_block1) < 0.01:
                 if np.linalg.norm(relative_block_pos1) < 0.1 and np.linalg.norm(relative_block_pos1[:2]) < 0.02:
                     # print(" [[Move up]] ")  # Moving up before going towards next block
-                    ac = np.array([0, 0, 1., 1.])
+                    ac = np.array([0, 0, 1., 1.], dtype=np.float32)
                     ac_type = 'pick:obj0'
                 else:
                     # print(" [[PnP Block0]] ")
@@ -500,7 +495,7 @@ class PnPExpertTwoObj:
                                                                                           self.tempGoal1_reached)
                 ac_type = ac_type + '1' if ac_type != 'stay' else ac_type
 
-        return ac, ac_type
+        return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.float32)
 
     def reset(self):
         self.block0_picked, self.block1_picked = False, False
@@ -537,15 +532,15 @@ class PnPExpertTwoObj:
         target_pos = block_pos + np.array([0, 0, 0.08])
         ac = clip_action((target_pos - cur_pos) * self.step_size)
         ac_type = 'pick:obj'
-        return np.concatenate([ac, np.array([1])]), ac_type
+        return np.concatenate([ac, np.array([1])], dtype=np.float32), ac_type
 
     def pickup_block(self, cur_pos, block_pos):
         if np.linalg.norm(cur_pos - block_pos) < 0.01:  # and gripper_state > 0.025: # TODO: need to adjust
-            ac = np.array([0, 0, 0, -1.])
+            ac = np.array([0, 0, 0, -1.], dtype=np.float32)
             ac_type = 'stay'
         else:
             ac = clip_action((block_pos - cur_pos) * self.step_size)
-            ac = np.concatenate([ac, np.array([-0.005])])
+            ac = np.concatenate([ac, np.array([-0.005])], dtype=np.float32)
             ac_type = 'pick:obj'
         return ac, ac_type
 
@@ -554,19 +549,27 @@ class PnPExpertTwoObj:
         # Collision avoid: We first move the gripper towards (x, y) coordinates of goal maintaining the gripper height
         if np.linalg.norm((goal_pos[:2] - cur_pos[:2])) > 0.01:
             ac = clip_action((goal_pos[:2] - cur_pos[:2]) * self.step_size)
-            ac = np.concatenate([ac, np.array([0]), np.array([grip])])
+            ac = np.concatenate([ac, np.array([0]), np.array([grip])], dtype=np.float32)
             ac_type = 'drop:obj'
 
         # We then move the gripper towards the goal -> Doing this after above action brings gripper vertically down
         elif np.linalg.norm((goal_pos - cur_pos)) > 0.01:
             ac = clip_action((goal_pos - cur_pos) * self.step_size)
-            ac = np.concatenate([ac, np.array([grip])])
+            ac = np.concatenate([ac, np.array([grip])], dtype=np.float32)
             ac_type = 'drop:obj'
 
         else:
-            ac = np.array([0, 0, 0, grip])
+            ac = np.array([0, 0, 0, grip], dtype=np.float32)
             ac_type = 'stay'
         return ac, ac_type
+
+    def add_noise_to_action(self, a, noise_eps=0., random_eps=0.,):
+        a = np.array([a])
+        noise = noise_eps * np.random.randn(*a.shape)  # gaussian noise
+        a += noise
+        a = np.clip(a, -1, 1)
+        a += np.random.binomial(1, random_eps, a.shape[0]).reshape(-1, 1) * (self._random_action(a.shape[0]) - a)
+        return a
 
     def _random_action(self, n):
         return np.random.uniform(low=-1, high=1, size=(n, 4))

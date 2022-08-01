@@ -1,6 +1,7 @@
-import random
+import sys
 import numpy as np
 import logging
+import tensorflow as tf
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +54,20 @@ class ReplayBuffer:
             Store batch of episodes into replay buffer
             episode_batch: array(batch_size x (T or T+1) x dim)
         """
-        batch_sizes = [len(episode_batch[key]) for key in episode_batch.keys()]
-        assert np.all(np.array(batch_sizes) == batch_sizes[0])
-        batch_size = batch_sizes[0]
+        batch_sizes = [episode_batch[key].shape[0] for key in episode_batch.keys()]
+        batch_sizes = tf.convert_to_tensor(batch_sizes, dtype=tf.int32)
+        try:
+            assert tf.math.reduce_all(tf.math.equal(batch_sizes, batch_sizes[0]))
+        except AssertionError:
+            logger.error("The Buffer is storing an episode with unequal Batch Sizes of its tensors from rollout")
+            sys.exit(-1)
 
-        # Get indexes of the replay buffer to insert episode batch
+        batch_size = batch_sizes[0].numpy()
+
+        # Get indexes of the replay buffer to insert episode batch <---- This still uses numpy. TODO: Convert to TF
         idxs = self._get_storage_idx(batch_size)
 
-        # load inputs into buffers
+        # load inputs into buffers. TODO: Convert to TF compatible since Tensor object doesn't support item assignment
         for key in self.buffer.keys():
             self.buffer[key][idxs] = episode_batch[key]
 
@@ -74,7 +81,7 @@ class ReplayBuffer:
         # Success flag for single transition are absent
         if self.current_inner_idx:
             self.buffer['successes'][self.current_outer_idx][self.current_inner_idx - 1] = 0
-        self.current_inner_idx +=1
+        self.current_inner_idx += 1
         self.n_transitions_stored += 1
 
     def new_transition(self):
@@ -91,14 +98,15 @@ class ReplayBuffer:
         self.current_size = 0
 
     def _get_storage_idx(self, num_to_ins=None):
-        num_to_ins = num_to_ins or 1   # buffer size increment
+        num_to_ins = num_to_ins or 1  # buffer size increment
         try:
             assert num_to_ins <= self.buffer_size
-        except AssertionError as e:
-            print("Batch committed to replay is too large! {}>{}".format(num_to_ins, self.buffer_size))
+        except AssertionError:
+            logger.error("Batch committed to replay is too large! {}>{}".format(num_to_ins, self.buffer_size))
+            sys.exit(-1)
 
         # consecutively insert until you hit the end of the buffer, and then insert randomly.
-        if self.current_size+num_to_ins <= self.buffer_size:
+        if self.current_size + num_to_ins <= self.buffer_size:
             idx = np.arange(self.current_size, self.current_size + num_to_ins)
         elif self.current_size < self.buffer_size:
             overflow = num_to_ins - (self.buffer_size - self.current_size)

@@ -1,6 +1,6 @@
 import collections
 import numpy as np
-from utils.mpi import normalizer
+from utils.mpi import Normalizer
 from domains.PnP import MyPnPEnvWrapperForGoalGAIL
 
 
@@ -32,23 +32,23 @@ def get_config_env(args):
     args.g_dim = len(env.current_goal)
     args.s_dim = obs.shape[0]
     args.a_dim = env.action_space.shape[0]
-    args.action_max = env.action_space.high[0]
+    args.action_max = float(env.action_space.high[0])
     return args
 
 
 def preprocess_robotic_demos(demos, env_params, window_size=1, clip_range=5):
     # Declare Normaliser
-    norm_o = normalizer(size=env_params['obs'], default_clip_range=clip_range)
+    norm_o = Normalizer(size=env_params['obs'], default_clip_range=clip_range)
     norm_o.update(demos['curr_states'][:, :env_params['obs']])
     norm_o.recompute_stats()
-    norm_g = normalizer(size=env_params['goal'], default_clip_range=clip_range)
+    norm_g = Normalizer(size=env_params['goal'], default_clip_range=clip_range)
     norm_g.update(demos['curr_states'][:, env_params['obs']:])
     norm_g.recompute_stats()
 
     # Normalise state
-    def wrap_normalise(states):
-        _state_obs = norm_o.normalize(states[:, :env_params['obs']])
-        _state_g = norm_g.normalize(states[:, env_params['obs']:])
+    def wrap_normalise(_states):
+        _state_obs = norm_o.normalize(_states[:, :env_params['obs']])
+        _state_g = norm_g.normalize(_states[:, env_params['obs']:])
         return _state_obs, _state_g
 
     state_obs, state_g = wrap_normalise(demos['curr_states'])

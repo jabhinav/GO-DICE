@@ -512,7 +512,7 @@ class Agent(object):
         print("[DEBUG TIME] Take step: ", t2)
         return trajectories
 
-    def learn(self, expert_data: Dict, use_pretrained_actor: bool,
+    def train(self, expert_data: Dict, use_pretrained_actor: bool,
               param_dir: str, fig_path: str, log_dir: str, exp_num: int = 0):
 
         num_expert_trans = expert_data['states'].shape[0]
@@ -624,7 +624,7 @@ class Agent(object):
         self.critic.save_weights(os.path.join(param_dir, "critic.h5"), overwrite=True)
 
 
-def train(sup, exp_num):
+def run(sup, exp_num):
 
     env_name = 'StackBoxWorld'
     use_pretrained_actor = True
@@ -709,14 +709,14 @@ def train(sup, exp_num):
     pretrained_param_dir = os.path.join(pretrained_model_dir, "params{}".format(0))
     agent.load_preTrainedModels(use_pretrained_actor, pretrained_param_dir, model_id='best')
 
-    agent.learn(expert_data, use_pretrained_actor, param_dir, fig_path, log_dir)
+    agent.train(expert_data, use_pretrained_actor, param_dir, fig_path, log_dir)
     print("Finish.", file=open(file_txt_results_path, 'a'))
     # else:
     #     print("Skipping Training", file=open(file_txt_results_path, 'a'))
 
 
 if __name__ == "__main__":
-    train(sup=1., exp_num=0)
+    run(sup=1., exp_num=0)
 
 
 

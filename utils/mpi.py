@@ -1,9 +1,19 @@
 import threading
 import numpy as np
+import tensorflow as tf
 from mpi4py import MPI
 
 
-class normalizer:
+def reshape_for_broadcasting(source, target):
+    """Reshapes a tensor (source) to have the correct shape and dtype of the target
+    before broadcasting it with MPI.
+    """
+    dim = len(target.get_shape())
+    shape = ([1] * (dim - 1)) + [-1]
+    return tf.reshape(tf.cast(source, target.dtype), shape)
+
+
+class Normalizer:
     def __init__(self, size, eps=1e-2, default_clip_range=np.inf):
         self.size = size
         self.eps = eps
@@ -31,8 +41,21 @@ class normalizer:
             self.local_sumsq += (np.square(v)).sum(axis=0)
             self.local_count[0] += v.shape[0]
 
+    # normalize the observation
+    def normalize(self, v, clip_range=None):
+        if clip_range is None:
+            clip_range = self.default_clip_range
+        mean = reshape_for_broadcasting(self.mean, v)
+        std = reshape_for_broadcasting(self.std, v)
+        return tf.clip_by_value((v - mean) / std, -clip_range, clip_range)
+
+    def denormalize(self, v):
+        mean = reshape_for_broadcasting(self.mean, v)
+        std = reshape_for_broadcasting(self.std, v)
+        return mean + v * std
+
     # sync the parameters across the cpus
-    def sync(self, local_sum, local_sumsq, local_count):
+    def synchronize(self, local_sum, local_sumsq, local_count):
         local_sum[...] = self._mpi_average(local_sum)
         local_sumsq[...] = self._mpi_average(local_sumsq)
         local_count[...] = self._mpi_average(local_count)
@@ -48,7 +71,7 @@ class normalizer:
             self.local_sum[...] = 0
             self.local_sumsq[...] = 0
         # synrc the stats
-        sync_sum, sync_sumsq, sync_count = self.sync(local_sum, local_sumsq, local_count)
+        sync_sum, sync_sumsq, sync_count = self.synchronize(local_sum, local_sumsq, local_count)
         # update the total stuff
         self.total_sum += sync_sum
         self.total_sumsq += sync_sumsq
@@ -65,8 +88,3 @@ class normalizer:
         buf /= MPI.COMM_WORLD.Get_size()
         return buf
 
-    # normalize the observation
-    def normalize(self, v, clip_range=None):
-        if clip_range is None:
-            clip_range = self.default_clip_range
-        return np.clip((v - self.mean) / (self.std), -clip_range, clip_range)

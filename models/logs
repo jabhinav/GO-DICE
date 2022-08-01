@@ -1,5 +1,0 @@
-07/26/2022 17:10:09 - INFO - __main__ -   
-
----------------------------------------------------------------------------------------------
-07/26/2022 17:10:09 - INFO - __main__ -   Namespace(a_dim=4, a_lr=0.0004, ac_iter=5, action_max=1.0, anneal_disc=False, annealing_coeff=1.0, batch_size=96, buffer_size=1000000, c_lr=0.003, clip_obs=200.0, collect_episodes=1, d_iter=10, d_lr=0.0005, env_name='OpenAIPickandPlace', exp_num=0, expert_behaviour='0', full_space_as_goal=False, g_dim=3, gail_weight=0.1, gamma=0.99, horizon=100, lambda=0.95, n_batches=2, n_batches_disc=20, noise_eps=0.15, num_cycles=2, num_demos=5, num_epochs=2, outer_iters=2, q_annealing=1.0, random_eps=0.3, relabel_for_policy=True, relative_goals=False, replay_k=4, replay_strategy='future', rew_type='negative', s_dim=10, stacking=False, target_in_the_air=False, tau=0.005, train_dis_per_rollout=True, two_object=True, two_rs=False)
-07/26/2022 17:10:09 - INFO - __main__ -   Generating Expert Data
