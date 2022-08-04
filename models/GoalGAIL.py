@@ -201,8 +201,8 @@ class DDPG(object):
         target_Q_pi = self.critic_target(data['states_2'], data['goals_2'], target_pi / self.args.action_max)
         target_Q_pi = tf.squeeze(target_Q_pi, axis=1)
 
-        # In HER, terminate_bootstrapping = True is reqd. and consequently we add(1 - data['successes']) else omit
         target_values = data['rewards'] + self.args.gamma * target_Q_pi * (1 - data['successes'])
+
         if self.args.rew_type == 'negative':
             # Since our Disc. rewards are <= 0 and completion rew. is either 0 or 1.
             # The max. return with terminate_bootstrapping we can get is 1. while least could be -inf.'
@@ -214,29 +214,35 @@ class DDPG(object):
 
         main_Q = self.critic_main(data['states'], data['goals'], data['actions'] / self.args.action_max)
         main_Q = tf.squeeze(main_Q, axis=1)
-        critic_loss = tf.keras.losses.MSE(target_values, main_Q)
+        critic_loss = tf.keras.losses.MSE(tf.stop_gradient(target_values), main_Q)
 
         # ########################################## Actor Loss: -Q(s,g,a) ######################################### #
         main_pi = self.args.action_max * self.actor_main(data['states'], data['goals'])
         main_Q_pi = self.critic_main(data['states'], data['goals'], main_pi / self.args.action_max)
+        main_Q_pi = tf.squeeze(main_Q_pi, axis=1)
         actor_loss = -tf.reduce_mean(main_Q_pi)
 
         # Add other components to actor loss
         actor_loss += self.args.l2_action_penalty * tf.reduce_mean(tf.square(main_pi / self.args.action_max))
 
-        # target_Q = self.critic_target(data['states_2'], data['goals_2'], data['actions'] / self.args.action_max)
-        # target_Q = tf.squeeze(target_Q, axis=1)
-        actor_loss += self.args.BC_Loss_coeff * tf.reduce_mean(data['is_demo'] *
-                                                               data['annealing_factor'] *
-                                                               tf.reduce_sum(tf.square(main_pi - data['actions']),
-                                                                             axis=-1))
+        # # To Use Expert Demos (1): add BC Loss
+        # bc_loss = data['is_demo'] * data['annealing_factor'] * tf.reduce_sum(tf.square(main_pi - data['actions']),
+        #                                                                      axis=-1)
+        # bc_loss = self.args.BC_Loss_coeff * tf.reduce_mean(bc_loss)
 
-        # TODO: Figure out what this component is and why is it multiplied in
-        #  above BC Loss Formulation before tf.reduce_mean
-        # * (1 - self.args.anneal_coeff_BC * tf.cast(tf.greater_equal(target_Q_pi,
-        #                                                             target_Q), dtype=tf.float32))
+        # To Use Expert Demos (2): add BC Loss with Q-Filter i.e. I(Q > Q_pi) or (1 - I(Q_pi > Q))
+        # bc_loss = data['is_demo'] * data['annealing_factor'] * tf.reduce_sum(tf.square(main_pi - data['actions']),
+        #                                                                      axis=-1) * (
+        #                       1 - self.args.anneal_coeff_BC * tf.cast(tf.greater_equal(main_Q_pi, main_Q),
+        #                                                               dtype=tf.float32))
+        bc_loss = data['is_demo'] * data['annealing_factor'] * tf.reduce_sum(tf.square(main_pi - data['actions']),
+                                                                             axis=-1) * \
+                  (tf.cast(tf.greater_equal(main_Q, main_Q_pi), dtype=tf.float32))
+        bc_loss = self.args.BC_Loss_coeff * tf.reduce_mean(bc_loss)
 
-        return actor_loss, critic_loss
+        actor_loss += bc_loss
+
+        return bc_loss, actor_loss, critic_loss
 
     @tf.function
     def train(self, data: Dict, normalise_obs_data=False):
@@ -253,13 +259,13 @@ class DDPG(object):
 
         # Compute DDPG losses
         with tf.GradientTape() as actor_tape, tf.GradientTape() as critic_tape:
-            actor_loss, critic_loss = self.compute_loss(data)
+            bc_loss, actor_loss, critic_loss = self.compute_loss(data)
 
         gradients_actor = actor_tape.gradient(actor_loss, self.actor_main.trainable_variables)
         gradients_critic = critic_tape.gradient(critic_loss, self.critic_main.trainable_variables)
         self.a_opt.apply_gradients(zip(gradients_actor, self.actor_main.trainable_variables))
         self.c_opt.apply_gradients(zip(gradients_critic, self.critic_main.trainable_variables))
-        return actor_loss, critic_loss
+        return bc_loss, actor_loss, critic_loss
 
     def build_model(self):
         # BUILD First
@@ -285,6 +291,9 @@ class DDPG(object):
         self.critic_main.load_weights(critic_model_path)
         self.actor_target.load_weights(actor_model_path)
         self.critic_target.load_weights(critic_model_path)
+
+        logger.info("Actor Weights Loaded from {}.".format(actor_model_path))
+        logger.info("Critic Weights Loaded from {}.".format(critic_model_path))
 
     def save_model(self, param_dir):
         # Save weights
@@ -320,17 +329,19 @@ class Agent(object):
                                                                  discriminator=gail_discriminator,
                                                                  gail_weight=args.gail_weight,
                                                                  two_rs=args.two_rs and args.anneal_disc,
-                                                                 with_termination=True)
+                                                                 with_termination=args.rollout_terminate)
 
         # Define the Buffers
         self.init_state = None
         self.on_policy_buffer = ReplayBuffer(buffer_shape, args.buffer_size, args.horizon, sample_her_transitions_pol)
         self.expert_buffer = expert_buffer
 
-        # ROLLOUT WORKER
-        self.policy_rollout_worker = RolloutWorker(self.env, self.policy, T=args.horizon, rollout_terminate=False,
+        # ROLLOUT WORKER: It is important that we set use_target_net=False for rolling out trajectories
+        # because we want actions taken using the current policu
+        self.policy_rollout_worker = RolloutWorker(self.env, self.policy, T=args.horizon,
+                                                   rollout_terminate=args.rollout_terminate,
                                                    exploit=False, noise_eps=args.noise_eps, random_eps=args.random_eps,
-                                                   use_target_net=True, render=False)
+                                                   compute_Q=True, use_target_net=False, render=False)
 
         # # Define Losses
         self.cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
@@ -361,6 +372,7 @@ class Agent(object):
             logger.info("Discriminator Weights Not Found at {}. Exiting!".format(disc_path))
             sys.exit(-1)
         self.discriminator.load_weights(os.path.join(param_dir, "discriminator.h5"))
+        logger.info("Discriminator Weights Loaded from {}.".format(disc_path))
         self.policy.load_model(param_dir)
 
     def save_model(self, param_dir):
@@ -420,24 +432,41 @@ class Agent(object):
             _data = [_data['states'], _data['goals'], _data['actions']]
             return _data
 
-        sampled_data = self.on_policy_buffer.sample(self.args.batch_size)
+        sampled_data = self.on_policy_buffer.sample(self.args.disc_batch_size)
         sampled_data = _process(sampled_data)
-        expert_data = self.expert_buffer.sample(self.args.batch_size)
+        expert_data = self.expert_buffer.sample(self.args.disc_batch_size)
         expert_data = _process(expert_data)
         return sampled_data, expert_data
 
     @tf.function
     def disc_train(self):
 
-        for _ in range(self.args.n_batches_disc):
+        avg_d_loss = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        avg_gan_loss = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        avg_grad_penalty = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        avg_disc_reward_pol = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        avg_disc_reward_exp = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+
+        for n in range(self.args.n_batches_disc):
             sampled_data, expert_data = self.get_disc_data()
             d_loss, gan_loss, grad_penalty = self.compute_disc_loss(sampled_data, expert_data)
 
             # For Book-keeping
-            avg_disc_reward_pol = tf.reduce_mean(self.discriminator.get_reward(*sampled_data))
-            avg_disc_reward_exp = tf.reduce_mean(self.discriminator.get_reward(*expert_data))
+            batched_disc_reward_pol = tf.reduce_mean(self.discriminator.get_reward(*sampled_data))
+            batched_disc_reward_exp = tf.reduce_mean(self.discriminator.get_reward(*expert_data))
+            avg_d_loss = avg_d_loss.write(n, d_loss)
+            avg_gan_loss = avg_gan_loss.write(n, gan_loss)
+            avg_grad_penalty = avg_grad_penalty.write(n, grad_penalty)
+            avg_disc_reward_pol = avg_disc_reward_pol.write(n, batched_disc_reward_pol)
+            avg_disc_reward_exp = avg_disc_reward_exp.write(n, batched_disc_reward_exp)
 
-        return d_loss, gan_loss, grad_penalty, avg_disc_reward_pol, avg_disc_reward_exp
+        avg_d_loss = tf.reduce_mean(avg_d_loss.stack())
+        avg_gan_loss = tf.reduce_mean(avg_gan_loss.stack())
+        avg_grad_penalty = tf.reduce_mean(avg_grad_penalty.stack())
+        avg_disc_reward_pol = tf.reduce_mean(avg_disc_reward_pol.stack())
+        avg_disc_reward_exp = tf.reduce_mean(avg_disc_reward_exp.stack())
+
+        return avg_d_loss, avg_gan_loss, avg_grad_penalty, avg_disc_reward_pol, avg_disc_reward_exp
 
     def _preprocess_og(self, states, achieved_goals, goals):
         if self.args.relative_goals:
@@ -495,23 +524,22 @@ class Agent(object):
 
                 for epoch in range(args.num_epochs):
 
-                    self.policy_rollout_worker.clear_history()
+                    self.policy_rollout_worker.clear_history()  # This resets Q_history and success_rate_history to 0
                     for cycle in range(args.num_cycles):
 
                         # ###################################### Collect Data ###################################### #
-                        for ep_num in range(args.collect_episodes):
-                            episode = self.policy_rollout_worker.generate_rollout(
-                                slice_goal=(3, 6) if args.full_space_as_goal else None,
-                                compute_Q=True)
+                        for ep_num in range(args.rollout_batch_size):
+                            episode, pol_stats = self.policy_rollout_worker.generate_rollout(
+                                slice_goal=(3, 6) if args.full_space_as_goal else None)
                             self.on_policy_buffer.store_episode(episode)
 
                         # ###################################### Train Policy ###################################### #
                         for _ in range(args.n_batches):
                             data_pol, data_exp = self.sample_data(batch_size=args.batch_size,
-                                                                  expert_batch_size=args.batch_size,
+                                                                  expert_batch_size=args.expert_batch_size,
                                                                   annealing_factor=annealing_factor, w_q2=q_annealing)
 
-                            # Combine the data
+                            # Combine the data: We are actually training actor and critic with policy and expert data
                             combined_data = {}
                             if data_pol is not None and data_exp is not None:
                                 for key in data_pol.keys():
@@ -522,37 +550,56 @@ class Agent(object):
                                 combined_data = data_pol
 
                             # Train Policy on each batch
-                            a_loss, c_loss = self.policy.train(combined_data)
+                            bc_loss, a_loss, c_loss = self.policy.train(combined_data)
 
                         # Update Policy Target Network
                         self.policy.update_targets()
 
+                        # Log the DDPG Losses
+                        with self.train_summary_writer.as_default():
+                            tf.summary.scalar('loss/Actor', a_loss, step=global_step)
+                            tf.summary.scalar('loss/Actor/BC', bc_loss, step=global_step)
+                            tf.summary.scalar('loss/Critic', c_loss, step=global_step)
+
                         # ################### Train Discriminator (per cycle of Policy Training) ################### #
                         if args.train_dis_per_rollout and args.n_batches_disc > 0 and not (
                                 epoch == args.num_epochs - 1 and cycle == args.num_cycles - 1):
-                            d_loss, gan_loss, grad_penalty, avg_disc_reward_pol, avg_disc_reward_exp = self.disc_train()
+                            d_loss, gan_loss, grad_penalty, disc_reward_pol, disc_reward_exp = self.disc_train()
+
                             # Empty the on policy buffer
                             self.on_policy_buffer.clear_buffer()
 
-                        # Log the Losses and Rewards
-                        with self.train_summary_writer.as_default():
-                            tf.summary.scalar('loss/Actor', a_loss, step=global_step)
-                            tf.summary.scalar('loss/Critic', c_loss, step=global_step)
-                            tf.summary.scalar('loss/Discriminator', d_loss, step=global_step)
-                            tf.summary.scalar('loss/Discriminator/GAN', gan_loss, step=global_step)
-                            tf.summary.scalar('loss/Discriminator/Grad_penalty', grad_penalty, step=global_step)
-
-                            tf.summary.scalar('reward/Policy', avg_disc_reward_pol, step=global_step)
-                            tf.summary.scalar('reward/Expert', avg_disc_reward_exp, step=global_step)
+                            # Log the Discriminator Loss and Rewards
+                            with self.train_summary_writer.as_default():
+                                tf.summary.scalar('loss/Discriminator', d_loss, step=global_step)
+                                tf.summary.scalar('loss/Discriminator/GAN', gan_loss, step=global_step)
+                                tf.summary.scalar('loss/Discriminator/Grad_penalty', grad_penalty, step=global_step)
+                                tf.summary.scalar('reward/Disc/Policy', disc_reward_pol, step=global_step)
+                                tf.summary.scalar('reward/Disc/Expert', disc_reward_exp, step=global_step)
 
                         global_step += 1
                     pbar.update(1)
 
                     # ##################### Train Discriminator (per epoch of Policy Training) ##################### #
                     if not args.train_dis_per_rollout and args.n_batches_disc > 0 and epoch != args.num_epochs - 1:
-                        d_loss, gan_loss, grad_penalty, avg_disc_reward_pol, avg_disc_reward_exp = self.disc_train()
+                        d_loss, gan_loss, grad_penalty, disc_reward_pol, disc_reward_exp = self.disc_train()
+
                         # Empty the on policy buffer
                         self.on_policy_buffer.clear_buffer()
+
+                        # Log the Discriminator Loss and Rewards
+                        with self.train_summary_writer.as_default():
+                            tf.summary.scalar('loss/Discriminator', d_loss, step=global_step)
+                            tf.summary.scalar('loss/Discriminator/GAN', gan_loss, step=global_step)
+                            tf.summary.scalar('loss/Discriminator/Grad_penalty', grad_penalty, step=global_step)
+                            tf.summary.scalar('reward/Disc/Policy', disc_reward_pol, step=global_step)
+                            tf.summary.scalar('reward/Disc/Expert', disc_reward_exp, step=global_step)
+
+                    # Log the Losses and Rewards (pol_stats carried over here carries the upto date stats)
+                    curr_epoch = (outer_iter - 1)*args.num_epochs + epoch
+                    with self.train_summary_writer.as_default():
+                        tf.summary.scalar('stats/Mean_Q', pol_stats['mean_Q'], step=curr_epoch)
+                        tf.summary.scalar('stats/Success_rate', pol_stats['success_rate'], step=curr_epoch)
 
                     # Save Last Model
                     self.save_model(args.param_dir)
@@ -582,7 +629,7 @@ def run(args, store_data_path=None):
                                                              discriminator=gail_discriminator,
                                                              gail_weight=args.gail_weight,
                                                              two_rs=args.two_rs and args.anneal_disc,
-                                                             with_termination=True)
+                                                             with_termination=args.rollout_terminate)
 
     # ###################################################### Expert ################################################# #
     start = time.time()
@@ -595,14 +642,14 @@ def run(args, store_data_path=None):
     # Load Buffer to store expert data
     expert_buffer = ReplayBuffer(buffer_shape, args.buffer_size, args.horizon, sample_her_transitions_exp)
     # Initiate a worker to generate expert rollouts
-    expert_worker = RolloutWorker(exp_env, expert_policy, T=args.horizon, rollout_terminate=True,
-                                  exploit=True, noise_eps=0, random_eps=0, use_target_net=False,
+    expert_worker = RolloutWorker(exp_env, expert_policy, T=args.horizon, rollout_terminate=args.rollout_terminate,
+                                  exploit=True, noise_eps=0., random_eps=0., compute_Q=False, use_target_net=False,
                                   render=False)
     # Generate and store expert data
     for i in range(args.num_demos):
         # print("\nGenerating demo:", i + 1)
         expert_worker.policy.reset()
-        _episode = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
+        _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
         expert_buffer.store_episode(_episode)
     logger.info("Expert Demos generated in {}.".format(str(datetime.timedelta(seconds=time.time()-start))))
     # ################################################### Store Data ############################################## #
@@ -623,14 +670,14 @@ def run(args, store_data_path=None):
         agent.load_model(args.param_dir)
 
         test_env = get_PnP_env(args)
-        test_worker = RolloutWorker(test_env, agent.policy, T=args.horizon, rollout_terminate=True,
-                                    exploit=True, noise_eps=0, random_eps=0, use_target_net=False,
-                                    render=True)
+        # While testing, we do not want DDPG policy to explore since it is a deterministic policy. Thus exploit=True
+        test_worker = RolloutWorker(test_env, agent.policy, T=args.horizon, rollout_terminate=args.rollout_terminate,
+                                    exploit=True, noise_eps=0., random_eps=0., compute_Q=True,
+                                    use_target_net=False, render=True)
 
         # To show policy
         for i in range(args.test_demos):
             print("\nShowing demo:", i + 1)
-            test_worker.policy.reset()
-            _ = test_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
+            _, pol_stats = test_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
 
     sys.exit(-1)

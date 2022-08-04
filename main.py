@@ -1,10 +1,12 @@
 import os
 import logging
 import argparse
+import datetime
 from models.GoalGAIL import run
 from utils.env import get_config_env
 
-logging.basicConfig(filename="./logging/logs", filemode='w',
+current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+logging.basicConfig(filename="./logging/logs_{}".format(current_time), filemode='w',
                     format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
@@ -32,33 +34,50 @@ def get_GoalGAIL_args():
     parser.add_argument('--horizon', type=int, default=50,
                         help='Set 50 for one_obj, 100 for two_obj:0, two_obj:1 and 150 for two_obj:2')
     parser.add_argument('--num_demos', type=int, default=100, help='Use 20 (expert pol)')
-    parser.add_argument('--collect_episodes', type=int, default=1, help='Use 1 (ddpg pol)')
+    parser.add_argument('--rollout_batch_size', type=int, default=2, help='Use 2 (ddpg pol) per thread')
     parser.add_argument('--random_eps', type=float, default=0.3, help='% of time a random action is taken (ddpg pol)')
     parser.add_argument('--noise_eps', type=float, default=0.15, help='std of gauss noise added to non-random actions '
                                                                       'as a percentage of max_u (ddpg pol)')
+    parser.add_argument('--rollout_terminate', type=bool, default=True,
+                        help='We retain the success flag=1 for states which satisfy goal condition, '
+                             'if set to False success flag will be 0 across traj.')
+    parser.add_argument('--terminate_bootstrapping', type=bool, default=True,
+                        help='Used by DDPG to compute target values. i.e. whether to use (1-done) in '
+                             'y = r + gamma*(1-done)*Q. '
+                             'WE WILL ALWAYS USE (1-done). Thus omitting the use of this control var.')
+    parser.add_argument('--buffer_size', type=int, default=int(1e6), help='--')
 
     # Specify Training configuration
-    parser.add_argument('--outer_iters', type=int, default=100, help='Use 1000')
+    parser.add_argument('--outer_iters', type=int, default=500, help='Use 1000')
     parser.add_argument('--num_epochs', type=int, default=5, help='Use 5')
     parser.add_argument('--num_cycles', type=int, default=50, help='Use 50')
     parser.add_argument('--n_batches', type=int, default=40, help='Use 40')
-    parser.add_argument('--batch_size', type=int, default=64, help='Try 96/128/256')
-    parser.add_argument('--buffer_size', type=int, default=int(1e6), help='--')
-
-    # Specify Optimiser/Loss Configuration
-    parser.add_argument('--a_lr', type=float, default=1e-3)
-    parser.add_argument('--c_lr', type=float, default=1e-3)
-    parser.add_argument('--d_lr', type=float, default=1e-4)
-    parser.add_argument('--polyak_tau', type=float, default=0.95, help='polyak averaging coefficient for soft-updates')
-    parser.add_argument('--l2_action_penalty', type=float, default=0., help='L2 regularize for policy network')
-    parser.add_argument('--anneal_coeff_BC', type=float, default=0., help='Keep it to 0 and do not anneal BC')
-    parser.add_argument('--BC_Loss_coeff', type=float, default=0., help='Weight BC Loss')
+    parser.add_argument('--batch_size', type=int, default=256,
+                        help='No. of trans to sample from on_policy_buffer for Policy Training (GOAL-GAIL uses 256)')
+    parser.add_argument('--expert_batch_size', type=int, default=96,
+                        help='No. of trans to sample from expert_buffer for Policy Training  (GOAL-GAIL uses 96)')
+    parser.add_argument('--disc_batch_size', type=int, default=256,
+                        help='Same as ddpg Pol batch_size. These many trans we sample from on_policy_buffer and '
+                             'expert_buffer for Discriminator Training  (GOAL-GAIL uses 256)')
 
     # Specify Discriminator Configuration
     parser.add_argument('--n_batches_disc', type=int, default=20, help='Use 0 for bc/her else use 20')
     parser.add_argument('--train_dis_per_rollout', type=bool, default=True)
     parser.add_argument('--rew_type', type=str, default='negative', choices=['negative', 'normalized', 'gail', 'airl'])
     parser.add_argument('--lambd', type=float, default=10.0, help='gradient penalty coefficient for wgan.')
+
+    # Specify Optimiser/Loss Configuration
+    parser.add_argument('--a_lr', type=float, default=1e-4)
+    parser.add_argument('--c_lr', type=float, default=1e-4)
+    parser.add_argument('--d_lr', type=float, default=1e-4)
+    parser.add_argument('--polyak_tau', type=float, default=0.95, help='polyak averaging coefficient for soft-updates')
+    parser.add_argument('--l2_action_penalty', type=float, default=1.,
+                        help='L2 regularize for policy network, GOAL-GAIL uses 0')
+    # parser.add_argument('--anneal_coeff_BC', type=float, default=0., help='Keep it to 0 and do not anneal BC')
+    parser.add_argument('--BC_Loss_coeff', type=float, default=0.01,
+                        help='Weight BC Loss, GOAL-GAIL uses 0, 1/Num_demos')
+    parser.add_argument('--Actor_Loss_coeff', type=float, default=0.001,
+                        help='Weight Actor Loss,  GOAL-GAIL uses 1')
 
     # Specify HER Transition/Transitional Data Sampling configuration
     parser.add_argument('--relabel_for_policy', type=bool, default=True,
@@ -95,5 +114,5 @@ def get_GoalGAIL_args():
 
 if __name__ == "__main__":
     args = get_GoalGAIL_args()
-    store_data_at = os.path.join(os.getcwd(), 'pnp_data/two_obj_fickle_start.pkl')
+    # store_data_at = os.path.join(os.getcwd(), 'pnp_data/two_obj_fickle_start.pkl')
     run(args, store_data_path=None)

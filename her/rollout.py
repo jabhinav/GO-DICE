@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class RolloutWorker:
     def __init__(self, env: MyPnPEnvWrapperForGoalGAIL, policy, T, rollout_terminate=True,
-                 exploit=False, noise_eps=0., random_eps=0., use_target_net=False, render=False,
+                 exploit=False, noise_eps=0., random_eps=0., compute_Q=False, use_target_net=False, render=False,
                  history_len=100):
         """
         Rollout worker generates experience by interacting with policy.
@@ -23,6 +23,7 @@ class RolloutWorker:
             exploit: whether to explore (random action sampling) or exploit (greedy)
             noise_eps: scale of the additive Gaussian noise
             random_eps: probability of selecting a completely random action
+            compute_Q: Whether to compute Q Values
             use_target_net: whether to use the target net for action selection
             history_len (int): length of history for statistics smoothing
         """
@@ -42,6 +43,8 @@ class RolloutWorker:
         else:
             self.noise_eps = 0.
             self.random_eps = 0.
+
+        self.compute_Q = compute_Q
         self.use_target_net = use_target_net
 
         self.render = render
@@ -69,7 +72,7 @@ class RolloutWorker:
         return curr_state, curr_ag, curr_g
 
     @tf.function
-    def generate_rollout(self, reset=True, slice_goal=None, compute_Q=False):
+    def generate_rollout(self, reset=True, slice_goal=None):
 
         # generate episodes
         states = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
@@ -97,15 +100,15 @@ class RolloutWorker:
             goals = goals.write(t, tf.squeeze(curr_g))
 
             # Run the model and to get action probabilities and critic value
-            op = self.policy.act(curr_state, curr_ag, curr_g, compute_Q=compute_Q,
+            op = self.policy.act(curr_state, curr_ag, curr_g, compute_Q=self.compute_Q,
                                  noise_eps=self.noise_eps, random_eps=self.random_eps,
                                  use_target_net=self.use_target_net)
-            if compute_Q:
+            if self.compute_Q:
                 action, value = op
             else:
                 action = op
             actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
-            if compute_Q:
+            if self.compute_Q:
                 quality = quality.write(t, tf.squeeze(tf.cast(value, dtype=tf.float32)))
 
             # Apply action to the environment to get next state and reward
@@ -145,16 +148,25 @@ class RolloutWorker:
                        goals=tf.expand_dims(goals, axis=0),
                        actions=tf.expand_dims(actions, axis=0),
                        successes=tf.expand_dims(successes, axis=0))
-        if compute_Q:
+        if self.compute_Q:
             episode['quality'] = tf.expand_dims(quality, axis=0)
 
         success_rate = tf.reduce_mean(tf.cast(successes, tf.float32))
         self.success_history.append(success_rate)
-        if compute_Q:
+        if self.compute_Q:
             self.Q_history.append(tf.reduce_mean(quality))
         self.n_episodes += 1
 
-        return episode
+        # Log stats here to make these two functions part of computation graph of generate_rollout since *history vars
+        # can't be used when calling the funcs from outside as *history vars are populated in generate_rollout's graph
+        stats = {}
+        success_rate = self.current_success_rate()
+        stats['success_rate'] = success_rate
+        if self.compute_Q:
+            mean_Q = self.current_mean_Q()
+            stats['mean_Q'] = mean_Q
+
+        return episode, stats
 
     def clear_history(self):
         """
@@ -165,7 +177,7 @@ class RolloutWorker:
         self.n_episodes = 0
 
     def current_success_rate(self):
-        return tf.reduce_mean(self.success_history)
+        return tf.add_n(self.success_history)/tf.cast(len(self.success_history), dtype=tf.float32)
 
     def current_mean_Q(self):
-        return tf.reduce_mean(self.Q_history)
+        return tf.add_n(self.Q_history)/tf.cast(len(self.Q_history), dtype=tf.float32)

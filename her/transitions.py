@@ -31,6 +31,8 @@ def make_sample_her_transitions(replay_strategy, replay_k, reward_fun=None, env=
                           threshold of reaching the goal
                           else a threshold of 1e-6 is used which is so small that success flag is pre-dominantly set to
                           False (this is not useful for HER)
+                          This flag is controlled by rollout_terminate i.e. while rolling out whether we have obtained
+                          success flag from env. or voluntarily set to 0 across traj
     """
     if replay_strategy not in ['future', 'none']:
         raise ValueError("Invalid replay strategy: {}".format(replay_strategy))
