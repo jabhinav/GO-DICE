@@ -164,7 +164,7 @@ class Agent(object):
                     pbar.set_postfix(LossA=np.average(it_ALoss), TimeOpt='{}s'.format(opt_time))
                     pbar.update(1)
 
-        plot_metric(total_actor_loss, fig_path, exp_num, name='ActorLoss')
+        plot_metric(total_actor_loss, fig_path, exp_num, y_label='ActorLoss')
 
         self.save_model(param_dir)
 

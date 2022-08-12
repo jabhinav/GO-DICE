@@ -613,10 +613,10 @@ class Agent(object):
                                      AvgEpLen=avg_traj_len,)
                     pbar.update(1)
 
-        plot_metric(total_disc_loss, fig_path, exp_num, name='Disc')
-        plot_metric(total_actor_loss, fig_path, exp_num, name='Actor')
-        plot_metric(total_critic_loss, fig_path, exp_num, name='Critic')
-        plot_metric(total_ent_loss, fig_path, exp_num, name='Entropy')
+        plot_metric(total_disc_loss, fig_path, exp_num, y_label='Disc')
+        plot_metric(total_actor_loss, fig_path, exp_num, y_label='Actor')
+        plot_metric(total_critic_loss, fig_path, exp_num, y_label='Critic')
+        plot_metric(total_ent_loss, fig_path, exp_num, y_label='Entropy')
 
         # Save weights
         self.discriminator.save_weights(os.path.join(param_dir, "discriminator.h5"), overwrite=True)

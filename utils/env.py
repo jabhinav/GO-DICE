@@ -1,6 +1,6 @@
 import collections
 import numpy as np
-from utils.mpi import Normalizer
+from utils.normalise import Normalizer
 from domains.PnP import MyPnPEnvWrapperForGoalGAIL
 
 

@@ -1,32 +1,28 @@
-import os
-import json
-import numpy as np
 from matplotlib import pyplot as plt
 
 
-def plot_metric(loss, fig_path, exp_num, name='Loss'):
+def plot_metric(metric, fig_path, y_label='Loss', x_label='Iterations'):
     fig, ax = plt.subplots()
-    ax.plot(loss, 'r')
+    ax.plot(metric, 'r')
+    
+    ax.grid(True)
     # ax.legend(loc='upper right')
-    ax.set_xlabel('Iterations')
-    ax.set_ylabel(name)
-    plt.savefig(fig_path + "_{}_{}.png".format(name, exp_num))
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    plt.savefig(fig_path)
+    plt.close()
 
 
-def plot_vae_loss(loss, fig_path, exp_num, name='Loss'):
+def plot_metrics(metrics, labels, fig_path, y_label='Loss', x_label='Iterations'):
     fig, ax = plt.subplots()
-    ax.plot(loss, 'r')
-    # ax.legend(loc='upper right')
-    ax.set_xlabel('Iterations')
-    ax.set_ylabel(name)
-    plt.savefig(fig_path + "_VAE_{}.png".format(exp_num))
-
-
-def plot_vae_alternating_loss(sup_loss, unsup_loss, fig_path, exp_num):
-    fig, ax = plt.subplots()
-    ax.semilogy(sup_loss, 'b', label='Supervised Loss')
-    ax.semilogy(unsup_loss, 'r', label='Unsupervised Loss')
+    for metric, label in zip(metrics, labels):
+        ax.semilogy(metric, label=label)
+    
+    ax.grid(True)
     ax.legend(loc='upper right')
-    ax.set_xlabel('Iterations')
-    ax.set_ylabel('Loss')
-    plt.savefig(fig_path + "_VAE_{}.png".format(exp_num))
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    plt.savefig(fig_path)
+    plt.close()
+
+    

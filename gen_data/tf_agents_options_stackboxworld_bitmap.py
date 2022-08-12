@@ -714,7 +714,7 @@ class myAgentOptions:
         if not curr_time_step:
             curr_time_step = _env.current_time_step()
         action_step = _policy.action(curr_time_step)
-        next_time_step = _env.step(action_step.action)
+        next_time_step = _env.train(action_step.action)
         _traj = trajectory.from_transition(curr_time_step, action_step, next_time_step)
         transition = trajectory.Transition(curr_time_step, action_step, next_time_step)
         return next_time_step, transition, _traj
@@ -1006,7 +1006,7 @@ class myAgentOptions:
 
             while not _time_step.is_last():
                 action_step = saved_policy.action(_time_step)
-                _time_step = eval_tf_env.step(action_step.action)
+                _time_step = eval_tf_env.train(action_step.action)
                 episode_return += _time_step.reward
                 print("Action {}: ".format(env.step_to_id[action_step.action.numpy()[0]]),
                       _find(_time_step.observation['grid_world'].numpy()[0], 0))
@@ -1033,7 +1033,7 @@ class myAgentOptions:
 
             while not _time_step.is_last():
                 action_step = eval_policy.action(_time_step)
-                _time_step = eval_tf_env.step(action_step.action)
+                _time_step = eval_tf_env.train(action_step.action)
                 print("Action {}: ".format(env.step_to_id[action_step.action.numpy()[0]]),
                       _find(_time_step.observation['grid_world'].numpy()[0], 0))
                 episode_return += _time_step.reward

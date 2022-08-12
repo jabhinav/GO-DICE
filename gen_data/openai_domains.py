@@ -115,7 +115,7 @@ class FetchPickAndPlace:
 
             action[len(action) - 1] = 0.05  # for the last action which is gripper opening/closing
 
-            obsDataNew, reward, done, info = env.step(action)
+            obsDataNew, reward, done, info = env.train(action)
             timeStep += 1
 
             episodeLatentStates.append(0)
@@ -138,7 +138,7 @@ class FetchPickAndPlace:
 
             action[len(action) - 1] = -0.005  # Close
 
-            obsDataNew, reward, done, info = env.step(action)
+            obsDataNew, reward, done, info = env.train(action)
             timeStep += 1
 
             episodeLatentStates.append(0)
@@ -161,7 +161,7 @@ class FetchPickAndPlace:
 
             action[len(action) - 1] = -0.005  # Keep the gripper closed
 
-            obsDataNew, reward, done, info = env.step(action)
+            obsDataNew, reward, done, info = env.train(action)
             timeStep += 1
 
             episodeLatentStates.append(1)
@@ -181,7 +181,7 @@ class FetchPickAndPlace:
 
             action[len(action) - 1] = -0.005  # keep the gripper closed
 
-            obsDataNew, reward, done, info = env.step(action)
+            obsDataNew, reward, done, info = env.train(action)
             timeStep += 1
 
             episodeLatentStates.append(1)

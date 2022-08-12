@@ -5,6 +5,7 @@ from domains.PnP import MyPnPEnvWrapperForGoalGAIL
 from mujoco_py import MujocoException
 from collections import deque
 import tensorflow as tf
+from utils.debug import debug
 
 logger = logging.getLogger(__name__)
 
@@ -73,14 +74,19 @@ class RolloutWorker:
 
     @tf.function
     def generate_rollout(self, reset=True, slice_goal=None):
+        debug("generate_rollout")
 
         # generate episodes
         states = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         achieved_goals = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        states_2 = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        achieved_goals_2 = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         goals = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         actions = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
-        successes = tf.TensorArray(dtype=tf.int32, size=0, dynamic_size=True)
+        
+        successes = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         quality = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        distances = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
 
         # Initialize the environment
         curr_state, curr_ag, curr_g = self.reset_rollout(reset=reset)
@@ -107,19 +113,26 @@ class RolloutWorker:
                 action, value = op
             else:
                 action = op
+            
             actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
             if self.compute_Q:
                 quality = quality.write(t, tf.squeeze(tf.cast(value, dtype=tf.float32)))
 
             # Apply action to the environment to get next state and reward
             try:
-                curr_state, curr_ag, curr_g, done = tf.numpy_function(func=self.env.step, inp=[action, self.render],
-                                                                      Tout=[tf.float32, tf.float32, tf.float32, tf.int32])
+                curr_state, curr_ag, curr_g, done, distance = tf.numpy_function(func=self.env.step,
+                                                                                inp=[action, self.render],
+                                                                                Tout=[tf.float32, tf.float32,
+                                                                                      tf.float32, tf.int32, tf.float32])
                 if self.rollout_terminate:
                     done = int(done)
                 else:
                     done = 0
-                successes = successes.write(t, done)
+
+                states_2 = states_2.write(t, tf.squeeze(curr_state))
+                achieved_goals_2 = achieved_goals_2.write(t, tf.squeeze(curr_ag))
+                successes = successes.write(t, float(done))
+                distances = distances.write(t, distance)
 
                 # # We will save the done signals even after the episode terminates in order to maintain traj. length
                 # if tf.cast(done, tf.bool):
@@ -138,25 +151,36 @@ class RolloutWorker:
 
         states = states.stack()
         achieved_goals = achieved_goals.stack()
+        states_2 = states_2.stack()
+        achieved_goals_2 = achieved_goals_2.stack()
         goals = goals.stack()
         actions = actions.stack()
+        
         quality = quality.stack()
         successes = successes.stack()
+        distances = distances.stack()  # The distance between achieved goal and desired goal
 
         episode = dict(states=tf.expand_dims(states, axis=0),
                        achieved_goals=tf.expand_dims(achieved_goals, axis=0),
+                       states_2=tf.expand_dims(states_2, axis=0),
+                       achieved_goals_2=tf.expand_dims(achieved_goals_2, axis=0),
                        goals=tf.expand_dims(goals, axis=0),
                        actions=tf.expand_dims(actions, axis=0),
-                       successes=tf.expand_dims(successes, axis=0))
+                       successes=tf.expand_dims(successes, axis=0),
+                       distances=tf.expand_dims(distances, axis=0))
         if self.compute_Q:
             episode['quality'] = tf.expand_dims(quality, axis=0)
 
-        success_rate = tf.reduce_mean(tf.cast(successes, tf.float32))
-        self.success_history.append(success_rate)
+        # success_rate = tf.reduce_mean(tf.cast(successes, tf.float32)) #
+        if tf.math.equal(tf.argmax(successes), 0):  # We want to check if goal is achieved or not i.e. binary
+            success = 0
+        else:
+            success = 1
+        self.success_history.append(tf.cast(success, tf.float32))
+        
         if self.compute_Q:
             self.Q_history.append(tf.reduce_mean(quality))
-        self.n_episodes += 1
-
+        
         # Log stats here to make these two functions part of computation graph of generate_rollout since *history vars
         # can't be used when calling the funcs from outside as *history vars are populated in generate_rollout's graph
         stats = {}
@@ -165,6 +189,8 @@ class RolloutWorker:
         if self.compute_Q:
             mean_Q = self.current_mean_Q()
             stats['mean_Q'] = mean_Q
+
+        self.n_episodes += 1
 
         return episode, stats
 

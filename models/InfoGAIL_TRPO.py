@@ -783,14 +783,14 @@ class Agent(object):
                                      AvgEpLen=avg_traj_len,)
                     pbar.update(1)
 
-        plot_metric(train_avg_traj_len, fig_path, exp_num, name='AvgTrajLength')
-        plot_metric(success_rates, fig_path, exp_num, name='SuccessRate')
+        plot_metric(train_avg_traj_len, fig_path, exp_num, y_label='AvgTrajLength')
+        plot_metric(success_rates, fig_path, exp_num, y_label='SuccessRate')
 
-        plot_metric(total_un_disc_loss, fig_path, exp_num, name='UnDiscLoss')
-        plot_metric(total_ln_disc_loss, fig_path, exp_num, name='LnDiscLoss')
-        plot_metric(total_actor_loss, fig_path, exp_num, name='ActorLoss')
-        plot_metric(total_critic_loss, fig_path, exp_num, name='CriticLoss')
-        plot_metric(total_ent_loss, fig_path, exp_num, name='Entropy')
+        plot_metric(total_un_disc_loss, fig_path, exp_num, y_label='UnDiscLoss')
+        plot_metric(total_ln_disc_loss, fig_path, exp_num, y_label='LnDiscLoss')
+        plot_metric(total_actor_loss, fig_path, exp_num, y_label='ActorLoss')
+        plot_metric(total_critic_loss, fig_path, exp_num, y_label='CriticLoss')
+        plot_metric(total_ent_loss, fig_path, exp_num, y_label='Entropy')
 
         self.save_model(param_dir)
 

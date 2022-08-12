@@ -705,11 +705,11 @@ class Agent(object):
                                      AvgEpLen=avg_traj_len,)
                     pbar.update(1)
 
-        plot_metric(train_avg_traj_len, fig_path, exp_num, name='AvgTrajLength')
-        plot_metric(total_disc_loss, fig_path, exp_num, name='DiscLoss')
-        plot_metric(total_actor_loss, fig_path, exp_num, name='ActorLoss')
-        plot_metric(total_critic_loss, fig_path, exp_num, name='CriticLoss')
-        plot_metric(total_ent_loss, fig_path, exp_num, name='Entropy')
+        plot_metric(train_avg_traj_len, fig_path, exp_num, y_label='AvgTrajLength')
+        plot_metric(total_disc_loss, fig_path, exp_num, y_label='DiscLoss')
+        plot_metric(total_actor_loss, fig_path, exp_num, y_label='ActorLoss')
+        plot_metric(total_critic_loss, fig_path, exp_num, y_label='CriticLoss')
+        plot_metric(total_ent_loss, fig_path, exp_num, y_label='Entropy')
 
         self.save_model(param_dir)
 

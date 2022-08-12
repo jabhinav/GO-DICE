@@ -16,7 +16,7 @@ ACTION_TO_LATENT_MAPPING = {
 def Step(observation, reward, done, **kwargs):
     """
     Convenience method creating a namedtuple with the results of the
-    environment.step method.
+    environment's step method.
     Put extra diagnostic info in the kwargs
     """
     _Step = collections.namedtuple("Step", ["observation", "reward", "done", "info"])
@@ -91,7 +91,7 @@ class PnPEnv(object):
     def step(self, action):
         next_obs, reward, _, info = self._env.step(
             action)  # FetchPickAndPlaceEnv freezes done to False and stores termination response in info
-        next_obs = self._transform_obs(next_obs['observation'])
+        next_obs = self._transform_obs(next_obs['observation'])  # Remove unwanted portions of the observed state
         info['obs2goal'] = self.transform_to_goal_space(next_obs)
         info['distance'] = np.linalg.norm(self.current_goal - info['obs2goal'])
         if self.full_space_as_goal:
@@ -183,25 +183,33 @@ class MyPnPEnvWrapperForGoalGAIL(PnPEnv):
         desired_goal = super(MyPnPEnvWrapperForGoalGAIL, self).current_goal
         return obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32)
 
-    def step(self, action, render=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def step(self, action, render=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         if len(action.shape) > 1:
             action = action[0]
         obs, _, done, info = super(MyPnPEnvWrapperForGoalGAIL, self).step(action)  # ignore reward (re-computed in HER)
 
         if render:
             super(MyPnPEnvWrapperForGoalGAIL, self).render()
+        
         achieved_goal = super(MyPnPEnvWrapperForGoalGAIL, self).transform_to_goal_space(obs)
         desired_goal = super(MyPnPEnvWrapperForGoalGAIL, self).current_goal
         success = int(done)
-        return obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32), \
-               np.array(success, np.int32)
+        
+        return obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32), np.array(success, np.int32), info['distance'].astype(np.float32)
 
     def reward_fn(self, ag_2, g, o, relative_goal=False, distance_metric='L1', only_feasible=False,
                   extend_dist_rew_weight=0.):
+        """
+            Custom reward function with two components:
+                (a) 0/1 for whether goal is reached (weighed by self.goal_weight),
+                (b) relative distance between achieved goal and desired goal (weighed by extend_dist_rew_weight)
+        """
+        
         if relative_goal:
             dif = o[:, -2:]
         else:
             dif = ag_2 - g
+        
         if distance_metric == 'L1':
             goal_distance = np.linalg.norm(dif, ord=1, axis=-1)
         elif distance_metric == 'L2':
@@ -211,13 +219,12 @@ class MyPnPEnvWrapperForGoalGAIL(PnPEnv):
         else:
             raise NotImplementedError('Unsupported distance metric type.')
 
-        if only_feasible:
-            ret = np.logical_and(goal_distance < self.terminal_eps, [self.is_feasible(g_ind) for g_ind in
-                                                                     g]) * self.goal_weight - \
-                  extend_dist_rew_weight * goal_distance
-        else:
-            ret = (goal_distance < self.terminal_eps) * self.goal_weight - \
-                  extend_dist_rew_weight * goal_distance
+        # if only_feasible:
+        #     ret = np.logical_and(goal_distance < self.terminal_eps, [self.is_feasible(g_ind) for g_ind in
+        #                                                              g]) * self.goal_weight - \
+        #           extend_dist_rew_weight * goal_distance
+        # else:
+        ret = (goal_distance < self.terminal_eps) * self.goal_weight - extend_dist_rew_weight * goal_distance
 
         return ret
 

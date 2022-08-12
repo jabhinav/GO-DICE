@@ -127,9 +127,9 @@ class ReplayBuffer(object):
 
     def get_sample(self, sample_size):
         if self.num_paths < sample_size:
-            return random.sample(self.buffer, self.num_paths)
+            return random.sample_transitions(self.buffer, self.num_paths)
         else:
-            return random.sample(self.buffer, sample_size)
+            return random.sample_transitions(self.buffer, sample_size)
 
     def size(self):
         return self.buffer_size

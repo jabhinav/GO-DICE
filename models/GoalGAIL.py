@@ -7,100 +7,25 @@ import datetime
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
-from typing import Dict, List, Tuple, Union
+from typing import Dict, Tuple
+
+from networks.actor_critic import Actor, Critic
+from networks.discriminator import Discriminator
 from utils.env import get_PnP_env
-from utils.mpi import Normalizer
-from keras.layers import Dense, Flatten, Add, Concatenate, LeakyReLU, BatchNormalization
+from utils.normalise import Normalizer
+from utils.buffer import get_buffer_shape
 import tensorflow_probability as tfp
-from domains.PnP import PnPEnv, MyPnPEnvWrapperForGoalGAIL, PnPExpert, PnPExpertTwoObj
+from domains.PnP import MyPnPEnvWrapperForGoalGAIL, PnPExpert, PnPExpertTwoObj
 from her.rollout import RolloutWorker
-from her.replay_buffer import ReplayBuffer
-from her.transitions import make_sample_her_transitions
+from her.replay_buffer import ReplayBufferTf
+from her.transitions import make_sample_her_transitions_tf
+from utils.debug import debug
 
 logger = logging.getLogger(__name__)
 
 
-class Actor(tf.keras.Model):
-    def __init__(self, a_dim, actions_max):
-        super(Actor, self).__init__()
-
-        self.max_actions = actions_max
-        self.fc1 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
-        self.fc2 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
-        self.a_out = Dense(units=a_dim, activation=tf.nn.tanh, kernel_initializer=tf.keras.initializers.GlorotUniform())
-
-    def call(self, curr_state, goal_state):
-        ip = tf.concat([curr_state, goal_state], axis=1)
-        h = self.fc1(ip)
-        h = self.fc2(h)
-        actions = self.a_out(h) * self.max_actions
-        return actions
-
-
-class Critic(tf.keras.Model):
-    def __init__(self, actions_max):
-        super(Critic, self).__init__()
-
-        self.max_actions = actions_max
-        self.fc1 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
-        self.fc2 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
-        self.q_out = Dense(units=1, activation=None, kernel_initializer=tf.keras.initializers.GlorotUniform())
-
-    def call(self, state, goal, actions):
-        ip = tf.concat([state, goal, actions / self.max_actions], axis=1)
-        h = self.fc1(ip)
-        h = self.fc2(h)
-        q = self.q_out(h)
-        return q
-
-
-class Discriminator(tf.keras.Model):
-    def __init__(self, rew_type: str = 'negative'):
-        super(Discriminator, self).__init__()
-        kernel_init = tf.keras.initializers.Orthogonal(gain=1.0)
-        self.concat = Concatenate()
-        # self.normalise = BatchNormalization(axis=0)
-        self.fc1 = Dense(units=256, activation=tf.nn.tanh, kernel_initializer=kernel_init)
-        self.fc2 = Dense(units=256, activation=tf.nn.tanh, kernel_initializer=kernel_init)
-        self.d_out = Dense(units=1, kernel_initializer=kernel_init)
-
-        self.rew_type: str = rew_type
-
-    def call(self, state, goal, action):
-        ip = self.concat([state, goal, action])
-        # ip = self.normalise(ip)
-
-        h = self.fc1(ip)
-        h = self.fc2(h)
-        d_out = self.d_out(h)
-        return d_out
-
-    def get_reward(self, state, goal, action):
-        # Compute the Discriminator Output
-        ip = self.concat([state, goal, action])
-        # ip = self.normalise(ip)
-
-        h = self.fc1(ip)
-        h = self.fc2(h)
-        d_out = self.d_out(h)
-
-        # Convert the output into reward
-        if self.rew_type == 'airl':
-            return d_out
-        elif self.rew_type == 'gail':
-            return -tf.math.log(1 - tf.nn.sigmoid(d_out) + 1e-8)
-        elif self.rew_type == 'normalized':
-            return tf.nn.sigmoid(d_out)
-        elif self.rew_type == 'negative':
-            return tf.math.log(tf.nn.sigmoid(d_out) + 1e-8)
-        else:
-            print("Specify the correct reward type")
-            raise NotImplementedError
-
-
 class DDPG(object):
-    def __init__(self, env: MyPnPEnvWrapperForGoalGAIL, args):
-        self.env = env
+    def __init__(self, args, transition_fn):
         self.args = args
         self.a_dim: int = args.a_dim
         self.s_dim: int = args.s_dim
@@ -125,9 +50,13 @@ class DDPG(object):
         self.actor_target.compile(optimizer=self.a_opt)
         self.critic_target.compile(optimizer=self.c_opt)
 
-        # Setup Normaliser
-        self.norm_s = Normalizer(self.s_dim, self.args.eps_norm, self.args.clip_norm)
-        self.norm_g = Normalizer(self.g_dim, self.args.eps_norm, self.args.clip_norm)
+        # # Setup Normaliser
+        self.norm_s = Normalizer(args.s_dim, args.eps_norm, args.clip_norm)
+        self.norm_g = Normalizer(args.g_dim, args.eps_norm, args.clip_norm)
+
+        # # Setup Policy's Buffer
+        self.transition_fn = transition_fn
+        self.buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon, transition_fn)
 
     def set_learning_rate(self, actor_learning_rate=None, critic_learning_rate=None):
         """Update learning rate."""
@@ -150,10 +79,11 @@ class DDPG(object):
             use_target_net=False, compute_Q=False, **kwargs):
 
         # Pre-process the state and goal
-        if self.args.relative_goals:
-            goal = goal - achieved_goal
-        state = tf.clip_by_value(state, -self.args.clip_obs, self.args.clip_obs)
-        goal = tf.clip_by_value(goal, -self.args.clip_obs, self.args.clip_obs)
+        state, goal = self.preprocess_og(state, achieved_goal, goal)
+
+        # Normalise (if running stats of Normaliser are updated, we get normalised data else un-normalised data)
+        state = self.norm_s.normalize(state)
+        goal = self.norm_g.normalize(goal)
 
         # Predict action
         if use_target_net:
@@ -162,17 +92,16 @@ class DDPG(object):
             action_mu = self.actor_main(state, goal)
 
         # # Action Post-Processing
-        # First add gaussian noise and clip
-        noise = noise_eps * self.args.action_max * tf.experimental.numpy.random.rand(*action_mu.shape)
+        # First add gaussian noise and clip to get the predicted action
+        noise = noise_eps * self.args.action_max * tf.experimental.numpy.random.randn(*action_mu.shape)
         action = action_mu + tf.cast(noise, tf.float32)
         action = tf.clip_by_value(action, -self.args.action_max, self.args.action_max)
 
-        # Take epsilon greedy action
+        # Then take epsilon greedy act i.e. act = take_random_act_coeff*random_act + (1-take_random_act_coeff)*pred_act
         random_action = self._random_action(action.shape)
-
-        action_sampler = tfp.distributions.Binomial(1, random_eps)
-        choose = action_sampler.sample(sample_shape=(action.shape[0], 1))
-        action += choose * (random_action - action)
+        random_action_prob = tfp.distributions.Binomial(1, probs=random_eps)
+        take_random_act_coeff = random_action_prob.sample(sample_shape=(action.shape[0], 1))
+        action += take_random_act_coeff * (random_action - action)
 
         if compute_Q:
             Q = self.compute_Qsga(state, goal, action_mu, use_target_net)
@@ -220,10 +149,10 @@ class DDPG(object):
         main_pi = self.args.action_max * self.actor_main(data['states'], data['goals'])
         main_Q_pi = self.critic_main(data['states'], data['goals'], main_pi / self.args.action_max)
         main_Q_pi = tf.squeeze(main_Q_pi, axis=1)
-        actor_loss = -tf.reduce_mean(main_Q_pi)
+        actor_loss = -tf.reduce_mean(main_Q_pi) * self.args.Actor_Loss_coeff
 
         # Add other components to actor loss
-        actor_loss += self.args.l2_action_penalty * tf.reduce_mean(tf.square(main_pi / self.args.action_max))
+        l2_action_penalty = self.args.l2_action_penalty * tf.reduce_mean(tf.square(main_pi / self.args.action_max))
 
         # # To Use Expert Demos (1): add BC Loss
         # bc_loss = data['is_demo'] * data['annealing_factor'] * tf.reduce_sum(tf.square(main_pi - data['actions']),
@@ -235,27 +164,19 @@ class DDPG(object):
         #                                                                      axis=-1) * (
         #                       1 - self.args.anneal_coeff_BC * tf.cast(tf.greater_equal(main_Q_pi, main_Q),
         #                                                               dtype=tf.float32))
-        bc_loss = data['is_demo'] * data['annealing_factor'] * tf.reduce_sum(tf.square(main_pi - data['actions']),
-                                                                             axis=-1) * \
-                  (tf.cast(tf.greater_equal(main_Q, main_Q_pi), dtype=tf.float32))
-        bc_loss = self.args.BC_Loss_coeff * tf.reduce_mean(bc_loss)
+        bc_loss_q_filter = data['is_demo'] \
+                           * data['annealing_factor'] \
+                           * tf.reduce_sum(tf.square(main_pi - data['actions']), axis=-1) \
+                           * (tf.cast(tf.greater_equal(main_Q, main_Q_pi), dtype=tf.float32))
+        bc_loss_q_filter = self.args.BC_Loss_coeff * tf.reduce_mean(bc_loss_q_filter)
 
-        actor_loss += bc_loss
+        actor_loss = actor_loss + l2_action_penalty + bc_loss_q_filter
 
-        return bc_loss, actor_loss, critic_loss
+        return bc_loss_q_filter, actor_loss, critic_loss
 
-    @tf.function
-    def train(self, data: Dict, normalise_obs_data=False):
-
-        # # Normalise -> We update the mean and std of Normaliser.
-        # # No need to use 'states_2'/'goals_2' to compute mean stats since their data overlaps with 'states'/'goals'
-        if normalise_obs_data:
-            self.norm_s.update(data['states'])
-            self.norm_g.update(data['goals'])
-            self.norm_s.recompute_stats()
-            self.norm_g.recompute_stats()
-            data['states'], data['states_2'] = self.norm_s.normalize(data['states']), self.norm_s.normalize(data['states_2'])
-            data['goals'], data['goals_2'] = self.norm_s.normalize(data['goals']), self.norm_s.normalize(data['goals_2'])
+    @tf.function(experimental_relax_shapes=True)
+    def train(self, data: Dict):
+        debug("train_ddpg")
 
         # Compute DDPG losses
         with tf.GradientTape() as actor_tape, tf.GradientTape() as critic_tape:
@@ -266,6 +187,32 @@ class DDPG(object):
         self.a_opt.apply_gradients(zip(gradients_actor, self.actor_main.trainable_variables))
         self.c_opt.apply_gradients(zip(gradients_critic, self.critic_main.trainable_variables))
         return bc_loss, actor_loss, critic_loss
+
+    def preprocess_og(self, states, achieved_goals, goals):
+        if self.args.relative_goals:
+            goals = goals - achieved_goals
+        states = tf.clip_by_value(states, -self.args.clip_obs, self.args.clip_obs)
+        goals = tf.clip_by_value(goals, -self.args.clip_obs, self.args.clip_obs)
+        return states, goals
+
+    def store_episode(self, episode_batch, update_stats=True):
+        """
+            episode_batch: array of batch_size x (T or T+1) x dim_key
+                           'states/achieved_goals' is of size T+1, others are of size T
+        """
+        self.buffer.store_episode(episode_batch=episode_batch)
+        if update_stats:
+            # Sample number of transitions in the batch
+            num_normalizing_transitions = episode_batch['actions'].shape[0] * episode_batch['actions'].shape[1]
+            transitions = self.transition_fn(episode_batch, tf.constant(num_normalizing_transitions, dtype=tf.int32))
+            # Preprocess the states and goals
+            states, achieved_goals, goals = transitions['states'], transitions['achieved_goals'], transitions['goals']
+            states, goals = self.preprocess_og(states, achieved_goals, goals)
+            # Update the normalisation stats: Updated Only after an episode (or more) has been rolled out
+            self.norm_s.update(states)
+            self.norm_g.update(goals)
+            self.norm_s.recompute_stats()
+            self.norm_g.recompute_stats()
 
     def build_model(self):
         # BUILD First
@@ -304,19 +251,14 @@ class DDPG(object):
 class Agent(object):
     def __init__(self,
                  args,
-                 buffer_shape: Dict[str, Tuple],
-                 expert_buffer: ReplayBuffer = None,
+                 expert_buffer: ReplayBufferTf = None,
                  gail_discriminator: Discriminator = None):
 
         self.args = args
-        self.buffer_shape = buffer_shape
 
         # Declare Environment for Policy
-        env = get_PnP_env(args)
-        self.env: MyPnPEnvWrapperForGoalGAIL = env
-
-        # Define Policy
-        self.policy = DDPG(env, args)
+        self.train_env: MyPnPEnvWrapperForGoalGAIL = get_PnP_env(args)
+        self.eval_env: MyPnPEnvWrapperForGoalGAIL = get_PnP_env(args)
 
         # Declare Discriminator
         self.discriminator = gail_discriminator
@@ -324,24 +266,34 @@ class Agent(object):
         self.d_opt = tf.keras.optimizers.Adam(args.d_lr)
 
         # Define the Transition function to map episodic data to transitional data (passed env will be used)
-        sample_her_transitions_pol = make_sample_her_transitions(args.replay_strategy, args.replay_k, env.reward_fn,
-                                                                 env,
-                                                                 discriminator=gail_discriminator,
-                                                                 gail_weight=args.gail_weight,
-                                                                 two_rs=args.two_rs and args.anneal_disc,
-                                                                 with_termination=args.rollout_terminate)
+        sample_her_transitions_pol = make_sample_her_transitions_tf(args.replay_strategy, args.replay_k,
+                                                                    reward_fun=self.train_env.reward_fn,
+                                                                    goal_weight=self.train_env.goal_weight,
+                                                                    discriminator=gail_discriminator,
+                                                                    gail_weight=args.gail_weight,
+                                                                    terminal_eps=self.train_env.terminal_eps,
+                                                                    two_rs=args.two_rs and args.anneal_disc,
+                                                                    with_termination=args.rollout_terminate)
 
-        # Define the Buffers
+        # # Define the Buffers
         self.init_state = None
-        self.on_policy_buffer = ReplayBuffer(buffer_shape, args.buffer_size, args.horizon, sample_her_transitions_pol)
+        # This On-policy buffer is for Discriminator Training
+        self.on_policy_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon,
+                                               sample_her_transitions_pol)
         self.expert_buffer = expert_buffer
 
-        # ROLLOUT WORKER: It is important that we set use_target_net=False for rolling out trajectories
-        # because we want actions taken using the current policu
-        self.policy_rollout_worker = RolloutWorker(self.env, self.policy, T=args.horizon,
+        # Define Policy
+        self.policy = DDPG(args, transition_fn=sample_her_transitions_pol)
+
+        # ROLLOUT WORKERS
+        self.policy_rollout_worker = RolloutWorker(self.train_env, self.policy, T=args.horizon,
                                                    rollout_terminate=args.rollout_terminate,
                                                    exploit=False, noise_eps=args.noise_eps, random_eps=args.random_eps,
                                                    compute_Q=True, use_target_net=False, render=False)
+        self.eval_rollout_worker = RolloutWorker(self.eval_env, self.policy, T=args.horizon,
+                                                 rollout_terminate=args.rollout_terminate,
+                                                 exploit=True, noise_eps=0., random_eps=0.,
+                                                 compute_Q=True, use_target_net=False, render=False)
 
         # # Define Losses
         self.cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
@@ -349,11 +301,7 @@ class Agent(object):
         # Define Tensorboard for logging Losses and Other Metrics
         if not os.path.exists(args.summary_dir):
             os.makedirs(args.summary_dir)
-        current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        train_log_dir = os.path.join(args.summary_dir, current_time, 'train')
-        test_log_dir = os.path.join(args.summary_dir, current_time, 'test')
-        self.train_summary_writer = tf.summary.create_file_writer(train_log_dir)
-        self.test_summary_writer = tf.summary.create_file_writer(test_log_dir)
+        self.summary_writer = tf.summary.create_file_writer(args.summary_dir)
 
     def set_learning_rate(self, disc_learning_rate=None, actor_learning_rate=None, critic_learning_rate=None):
         """Update learning rate."""
@@ -367,12 +315,13 @@ class Agent(object):
                                np.ones([1, self.args.a_dim]))
 
         # Load Models
-        disc_path = os.path.join(param_dir, "discriminator.h5")
-        if not os.path.exists(disc_path):
-            logger.info("Discriminator Weights Not Found at {}. Exiting!".format(disc_path))
-            sys.exit(-1)
-        self.discriminator.load_weights(os.path.join(param_dir, "discriminator.h5"))
-        logger.info("Discriminator Weights Loaded from {}.".format(disc_path))
+        if self.args.use_disc:
+            disc_path = os.path.join(param_dir, "discriminator.h5")
+            if not os.path.exists(disc_path):
+                logger.info("Discriminator Weights Not Found at {}. Exiting!".format(disc_path))
+                sys.exit(-1)
+            self.discriminator.load_weights(os.path.join(param_dir, "discriminator.h5"))
+            logger.info("Discriminator Weights Loaded from {}.".format(disc_path))
         self.policy.load_model(param_dir)
 
     def save_model(self, param_dir):
@@ -381,8 +330,91 @@ class Agent(object):
             os.makedirs(param_dir)
 
         # Save weights
-        self.discriminator.save_weights(os.path.join(param_dir, "discriminator.h5"), overwrite=True)
+        if self.args.use_disc:
+            self.discriminator.save_weights(os.path.join(param_dir, "discriminator.h5"), overwrite=True)
         self.policy.save_model(param_dir)
+
+    def sample_data_disc(self):
+        """
+        For Discriminator, we sample equal number of transitions from expert and on_policy_buffer
+        """
+
+        def _process(_data):
+            # Add gaussian noise to actions
+            noise = self.args.noise_eps * self.args.action_max * tf.experimental.numpy.random.randn(
+                *_data['actions'].shape)
+            noise = tf.cast(noise, dtype=tf.float32)
+            _data['actions'] = tf.clip_by_value(_data['actions'] + noise, -self.args.action_max, self.args.action_max)
+
+            for key in _data.keys():
+                _data[key] = tf.cast(_data[key], dtype=tf.float32)
+
+            _data = [_data['states'], _data['goals'], _data['actions']]
+            return _data
+
+        sampled_data = self.on_policy_buffer.sample_transitions(tf.constant(self.args.disc_batch_size, dtype=tf.int32))
+        sampled_data = _process(sampled_data)
+        expert_data = self.expert_buffer.sample_transitions(tf.constant(self.args.disc_batch_size, dtype=tf.int32))
+        expert_data = _process(expert_data)
+        return sampled_data, expert_data
+
+    def process_data(self, transitions, expert=False, annealing_factor=1., w_q2=1.):
+
+        states, achieved_goals, goals = transitions['states'], transitions['achieved_goals'], transitions['goals']
+        states_2, achieved_goals_2 = transitions['states_2'], transitions['achieved_goals_2']
+
+        # Process the states and goals
+        transitions['states'], transitions['goals'] = self.policy.preprocess_og(states, achieved_goals, goals)
+        transitions['states_2'], transitions['goals_2'] = self.policy.preprocess_og(states_2, achieved_goals_2, goals)
+
+        # Normalise before the actor-critic networks are exposed to data
+        transitions['states'] = self.policy.norm_s.normalize(transitions['states'])
+        transitions['states_2'] = self.policy.norm_s.normalize(transitions['states_2'])
+        transitions['goals'] = self.policy.norm_g.normalize(transitions['goals'])
+        transitions['goals_2'] = self.policy.norm_g.normalize(transitions['goals_2'])
+
+        # Define if the transitions are from expert or not
+        transitions['is_demo'] = tf.cast(expert, dtype=tf.int32) * tf.ones_like(transitions['rewards'], dtype=tf.int32)
+
+        # Define the annealing factor for the transitions
+        transitions['annealing_factor'] = annealing_factor * tf.ones_like(transitions['rewards'])
+
+        # Compute the total rewards (in case multiple-components of it exists)
+        if self.args.two_rs:
+            if self.args.use_disc:
+                if self.args.anneal_disc:
+                    transitions['rewards'] = transitions['rewards'] + w_q2 * transitions['rewards_disc']
+                else:
+                    transitions['rewards'] = transitions['rewards'] + transitions['rewards_disc']
+
+        # Make sure the data is of type tf.float32
+        for key in transitions.keys():
+            transitions[key] = tf.cast(transitions[key], dtype=tf.float32)
+
+        return transitions
+
+    @tf.function  # Make sure all the passed parameters are tensor flow constants to avoid retracing
+    def sample_data_pol(self, batch_size, expert_batch_size, annealing_factor=1., w_q2=1.):
+        """
+        For training DDPG, we sample transitions from policy's off-policy buffer?
+        WHY? Because we do want to overfit to bad data and DDPG is off-policy
+        """
+        debug("Sample_Policy_Train_Data")
+
+        # Sample Policy Transitions
+        policy_transitions = self.policy.buffer.sample_transitions(batch_size)
+        policy_transitions = self.process_data(policy_transitions, expert=tf.constant(False, dtype=tf.bool), w_q2=w_q2)
+
+        # Sample Expert Transitions
+        expert_transitions = self.expert_buffer.sample_transitions(expert_batch_size)
+        expert_transitions = self.process_data(expert_transitions, tf.constant(True, dtype=tf.bool),
+                                               annealing_factor=annealing_factor, w_q2=w_q2)
+
+        # Combine the data: We are actually training actor and critic with policy and expert data
+        combined_data = {}
+        for key in policy_transitions.keys():
+            combined_data[key] = tf.concat((policy_transitions[key], expert_transitions[key]), axis=0)
+        return combined_data
 
     def compute_disc_loss(self, sampled_data, expert_data):
 
@@ -409,38 +441,18 @@ class Agent(object):
             grads = tf.concat(grads, axis=-1)
             grad_penalty = self.args.lambd * tf.reduce_mean(tf.pow(tf.norm(grads, axis=-1) - 1, 2))
 
-            # Total loss
+            # # # Total loss # # #
             d_loss = gan_loss + grad_penalty
 
         gradients_of_discriminator = disc_tape.gradient(d_loss, self.discriminator.trainable_variables)
         self.d_opt.apply_gradients(zip(gradients_of_discriminator, self.discriminator.trainable_variables))
         return d_loss, gan_loss, grad_penalty
 
-    def get_disc_data(self):
+    @tf.function(experimental_relax_shapes=True)
+    def train_disc(self):
+        debug("train_disc")
 
-        def _process(_data):
-            # Add noise to actions
-            noise_policy = self.args.noise_eps * self.args.action_max * \
-                           tf.experimental.numpy.random.rand(*_data['actions'].shape)
-            noise_policy = tf.cast(noise_policy, dtype=tf.float32)
-            _data['actions'] = tf.clip_by_value(_data['actions'] + noise_policy, -self.args.action_max,
-                                                self.args.action_max)
-
-            for key in _data.keys():
-                _data[key] = tf.cast(_data[key], dtype=tf.float32)
-
-            _data = [_data['states'], _data['goals'], _data['actions']]
-            return _data
-
-        sampled_data = self.on_policy_buffer.sample(self.args.disc_batch_size)
-        sampled_data = _process(sampled_data)
-        expert_data = self.expert_buffer.sample(self.args.disc_batch_size)
-        expert_data = _process(expert_data)
-        return sampled_data, expert_data
-
-    @tf.function
-    def disc_train(self):
-
+        # For Book-keeping
         avg_d_loss = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         avg_gan_loss = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         avg_grad_penalty = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
@@ -448,7 +460,7 @@ class Agent(object):
         avg_disc_reward_exp = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
 
         for n in range(self.args.n_batches_disc):
-            sampled_data, expert_data = self.get_disc_data()
+            sampled_data, expert_data = self.sample_data_disc()
             d_loss, gan_loss, grad_penalty = self.compute_disc_loss(sampled_data, expert_data)
 
             # For Book-keeping
@@ -468,56 +480,14 @@ class Agent(object):
 
         return avg_d_loss, avg_gan_loss, avg_grad_penalty, avg_disc_reward_pol, avg_disc_reward_exp
 
-    def _preprocess_og(self, states, achieved_goals, goals):
-        if self.args.relative_goals:
-            goals = goals - achieved_goals
-        states = tf.clip_by_value(states, -self.args.clip_obs, self.args.clip_obs)
-        goals = tf.clip_by_value(goals, -self.args.clip_obs, self.args.clip_obs)
-        return states, goals
-
-    def process_transitions(self, transitions, expert=False, annealing_factor=1., w_q2=1.):
-
-        states, achieved_goals, goals = transitions['states'], transitions['achieved_goals'], transitions['goals']
-        states_2, achieved_goals_2 = transitions['states_2'], transitions['achieved_goals_2']
-
-        transitions['states'], transitions['goals'] = self._preprocess_og(states, achieved_goals, goals)
-        transitions['states_2'], transitions['goals_2'] = self._preprocess_og(states_2, achieved_goals_2, goals)
-        transitions['is_demo'] = int(expert) * tf.ones_like(transitions['rewards'])
-        transitions['annealing_factor'] = annealing_factor * tf.ones_like(transitions['rewards'])
-        if self.args.anneal_disc:
-            transitions['rewards'] = transitions['rewards'] + w_q2 * transitions['rewards_disc']
-
-        # Make sure the data is of type tf.float32
-        for key in transitions.keys():
-            transitions[key] = tf.cast(transitions[key], dtype=tf.float32)
-
-        return transitions
-
-    @tf.function
-    def sample_data(self, batch_size, expert_batch_size, annealing_factor=1., w_q2=1.) -> Tuple[Dict, Dict]:
-
-        policy_transitions, expert_transitions = None, None
-
-        # Sample Policy Transitions
-        if batch_size > 0:
-            policy_transitions = self.on_policy_buffer.sample(batch_size)
-            policy_transitions = self.process_transitions(policy_transitions, w_q2=w_q2)
-
-        # Sample Expert Transitions
-        if self.expert_buffer and expert_batch_size > 0:
-            expert_transitions = self.expert_buffer.sample(batch_size)
-            expert_transitions = self.process_transitions(expert_transitions, expert=True,
-                                                          annealing_factor=annealing_factor, w_q2=w_q2)
-
-        return policy_transitions, expert_transitions
-
-    def train(self):
+    def learn(self):
         args = self.args
         global_step = 0
 
         with tqdm(total=(args.outer_iters - 1) * args.num_epochs, position=0, leave=True) as pbar:
 
             for outer_iter in range(1, args.outer_iters):
+
                 logger.info("Outer iteration: {}/{}".format(outer_iter, args.outer_iters - 1))
                 annealing_factor = args.annealing_coeff ** outer_iter
                 q_annealing = args.q_annealing ** (outer_iter - 1)
@@ -525,52 +495,46 @@ class Agent(object):
                 for epoch in range(args.num_epochs):
 
                     self.policy_rollout_worker.clear_history()  # This resets Q_history and success_rate_history to 0
+                    self.eval_rollout_worker.clear_history()
+
                     for cycle in range(args.num_cycles):
 
                         # ###################################### Collect Data ###################################### #
                         for ep_num in range(args.rollout_batch_size):
                             episode, pol_stats = self.policy_rollout_worker.generate_rollout(
                                 slice_goal=(3, 6) if args.full_space_as_goal else None)
-                            self.on_policy_buffer.store_episode(episode)
+                            self.policy.store_episode(episode)  # Off-Policy Buffer
+                            self.on_policy_buffer.store_episode(episode)  # On-Policy Buffer for Disc
 
                         # ###################################### Train Policy ###################################### #
                         for _ in range(args.n_batches):
-                            data_pol, data_exp = self.sample_data(batch_size=args.batch_size,
-                                                                  expert_batch_size=args.expert_batch_size,
-                                                                  annealing_factor=annealing_factor, w_q2=q_annealing)
-
-                            # Combine the data: We are actually training actor and critic with policy and expert data
-                            combined_data = {}
-                            if data_pol is not None and data_exp is not None:
-                                for key in data_pol.keys():
-                                    combined_data[key] = tf.concat((data_pol[key], data_exp[key]), axis=0)
-                            elif data_exp is not None:
-                                combined_data = data_exp
-                            else:
-                                combined_data = data_pol
+                            data = self.sample_data_pol(batch_size=tf.constant(args.batch_size, dtype=tf.int32),
+                                                        expert_batch_size=tf.constant(args.expert_batch_size, dtype=tf.int32),
+                                                        annealing_factor=tf.constant(annealing_factor, dtype=tf.float32),
+                                                        w_q2=tf.constant(q_annealing, dtype=tf.float32))
 
                             # Train Policy on each batch
-                            bc_loss, a_loss, c_loss = self.policy.train(combined_data)
+                            bc_loss, a_loss, c_loss = self.policy.train(data)
 
                         # Update Policy Target Network
                         self.policy.update_targets()
 
                         # Log the DDPG Losses
-                        with self.train_summary_writer.as_default():
+                        with self.summary_writer.as_default():
                             tf.summary.scalar('loss/Actor', a_loss, step=global_step)
                             tf.summary.scalar('loss/Actor/BC', bc_loss, step=global_step)
                             tf.summary.scalar('loss/Critic', c_loss, step=global_step)
 
                         # ################### Train Discriminator (per cycle of Policy Training) ################### #
-                        if args.train_dis_per_rollout and args.n_batches_disc > 0 and not (
-                                epoch == args.num_epochs - 1 and cycle == args.num_cycles - 1):
-                            d_loss, gan_loss, grad_penalty, disc_reward_pol, disc_reward_exp = self.disc_train()
+                        if self.discriminator and args.train_dis_per_rollout and args.n_batches_disc > 0 and \
+                                not (epoch == args.num_epochs - 1 and cycle == args.num_cycles - 1):
+                            d_loss, gan_loss, grad_penalty, disc_reward_pol, disc_reward_exp = self.train_disc()
 
                             # Empty the on policy buffer
                             self.on_policy_buffer.clear_buffer()
 
                             # Log the Discriminator Loss and Rewards
-                            with self.train_summary_writer.as_default():
+                            with self.summary_writer.as_default():
                                 tf.summary.scalar('loss/Discriminator', d_loss, step=global_step)
                                 tf.summary.scalar('loss/Discriminator/GAN', gan_loss, step=global_step)
                                 tf.summary.scalar('loss/Discriminator/Grad_penalty', grad_penalty, step=global_step)
@@ -581,14 +545,15 @@ class Agent(object):
                     pbar.update(1)
 
                     # ##################### Train Discriminator (per epoch of Policy Training) ##################### #
-                    if not args.train_dis_per_rollout and args.n_batches_disc > 0 and epoch != args.num_epochs - 1:
-                        d_loss, gan_loss, grad_penalty, disc_reward_pol, disc_reward_exp = self.disc_train()
+                    if self.discriminator and not args.train_dis_per_rollout and args.n_batches_disc > 0 and \
+                            epoch != args.num_epochs - 1:
+                        d_loss, gan_loss, grad_penalty, disc_reward_pol, disc_reward_exp = self.train_disc()
 
                         # Empty the on policy buffer
                         self.on_policy_buffer.clear_buffer()
 
                         # Log the Discriminator Loss and Rewards
-                        with self.train_summary_writer.as_default():
+                        with self.summary_writer.as_default():
                             tf.summary.scalar('loss/Discriminator', d_loss, step=global_step)
                             tf.summary.scalar('loss/Discriminator/GAN', gan_loss, step=global_step)
                             tf.summary.scalar('loss/Discriminator/Grad_penalty', grad_penalty, step=global_step)
@@ -596,78 +561,89 @@ class Agent(object):
                             tf.summary.scalar('reward/Disc/Expert', disc_reward_exp, step=global_step)
 
                     # Log the Losses and Rewards (pol_stats carried over here carries the upto date stats)
-                    curr_epoch = (outer_iter - 1)*args.num_epochs + epoch
-                    with self.train_summary_writer.as_default():
-                        tf.summary.scalar('stats/Mean_Q', pol_stats['mean_Q'], step=curr_epoch)
-                        tf.summary.scalar('stats/Success_rate', pol_stats['success_rate'], step=curr_epoch)
+                    curr_epoch = (outer_iter - 1) * args.num_epochs + epoch
+                    with self.summary_writer.as_default():
+                        tf.summary.scalar('stats/Train/Mean_Q', pol_stats['mean_Q'], step=curr_epoch)
+                        tf.summary.scalar('stats/Train/Success_rate', pol_stats['success_rate'], step=curr_epoch)
 
-                    # Save Last Model
+                    # Save Last Model (post-epoch)
                     self.save_model(args.param_dir)
+
+                    if args.do_eval:
+                        for _ in range(args.eval_demos):
+                            _, eval_stats = self.eval_rollout_worker.generate_rollout(
+                                slice_goal=(3, 6) if args.full_space_as_goal else None)
+                        with self.summary_writer.as_default():
+                            tf.summary.scalar('stats/Eval/Mean_Q', eval_stats['mean_Q'], step=curr_epoch)
+                            tf.summary.scalar('stats/Eval/Success_rate', eval_stats['success_rate'], step=curr_epoch)
 
 
 def run(args, store_data_path=None):
-    logger.info("\n\n---------------------------------------------------------------------------------------------")
-    logger.info(json.dumps(vars(args), indent=4))
 
     # Two Object Env: target_in_the_air activates only for 2-object case
     exp_env = get_PnP_env(args)
 
-    buffer_shape = {
-        'states': (args.horizon + 1, args.s_dim),
-        'achieved_goals': (args.horizon + 1, args.g_dim),
-        'goals': (args.horizon, args.g_dim),
-        'actions': (args.horizon, args.a_dim),
-        'successes': (args.horizon,)
-    }
-
     # Define and Load the Discriminator Network - GAIL
-    gail_discriminator = Discriminator(rew_type=args.rew_type)
+    if args.use_disc:
+        gail_discriminator = Discriminator(rew_type=args.rew_type)
+    else:
+        gail_discriminator = None
 
     # Define the Transition function to map episodic data to transitional data
-    sample_her_transitions_exp = make_sample_her_transitions(args.replay_strategy, args.replay_k,
-                                                             exp_env.reward_fn, exp_env,
-                                                             discriminator=gail_discriminator,
-                                                             gail_weight=args.gail_weight,
-                                                             two_rs=args.two_rs and args.anneal_disc,
-                                                             with_termination=args.rollout_terminate)
+    sample_her_transitions_exp = make_sample_her_transitions_tf(args.replay_strategy, args.replay_k,
+                                                                reward_fun=exp_env.reward_fn,
+                                                                goal_weight=exp_env.goal_weight,
+                                                                discriminator=gail_discriminator,
+                                                                gail_weight=args.gail_weight,
+                                                                terminal_eps=exp_env.terminal_eps,
+                                                                two_rs=args.two_rs and args.anneal_disc,
+                                                                with_termination=args.rollout_terminate)
 
-    # ###################################################### Expert ################################################# #
-    start = time.time()
-    logger.info("Generating {} Expert Demos.".format(args.num_demos))
     # Load Expert Policy
     if args.two_object:
         expert_policy = PnPExpertTwoObj(exp_env, args.full_space_as_goal, expert_behaviour=args.expert_behaviour)
     else:
         expert_policy = PnPExpert(exp_env, args.full_space_as_goal)
     # Load Buffer to store expert data
-    expert_buffer = ReplayBuffer(buffer_shape, args.buffer_size, args.horizon, sample_her_transitions_exp)
+    expert_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon, sample_her_transitions_exp)
     # Initiate a worker to generate expert rollouts
     expert_worker = RolloutWorker(exp_env, expert_policy, T=args.horizon, rollout_terminate=args.rollout_terminate,
                                   exploit=True, noise_eps=0., random_eps=0., compute_Q=False, use_target_net=False,
                                   render=False)
-    # Generate and store expert data
-    for i in range(args.num_demos):
-        # print("\nGenerating demo:", i + 1)
-        expert_worker.policy.reset()
-        _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
-        expert_buffer.store_episode(_episode)
-    logger.info("Expert Demos generated in {}.".format(str(datetime.timedelta(seconds=time.time()-start))))
-    # ################################################### Store Data ############################################## #
-    if store_data_path:
-        expert_buffer.save_buffer_data(path=store_data_path)
-
     # ################################################### Train Model ############################################## #
-    start = time.time()
-    agent = Agent(args, buffer_shape, expert_buffer, gail_discriminator)
-
+    # ###################################################### Expert ################################################# #
     if args.do_train:
+        start = time.time()
+        exp_stats = {'success_rate': 0.}
+        logger.info("Generating {} Expert Demos.".format(args.expert_demos))
+        # Generate and store expert data
+        for i in range(args.expert_demos):
+            # print("\nGenerating demo:", i + 1)
+            expert_worker.policy.reset()
+            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
+            expert_buffer.store_episode(_episode)
+
+        logger.info("Expert Demos generated in {}.".format(str(datetime.timedelta(seconds=time.time() - start))))
+        logger.info("Expert Policy Success Rate: {}".format(exp_stats['success_rate']))
+
+        # ################################################### Store Data ############################################# #
+        if store_data_path:
+            expert_buffer.save_buffer_data(path=store_data_path)
+
+        start = time.time()
+        agent = Agent(args, expert_buffer, gail_discriminator)
+
         logger.info("Training .......")
-        agent.train()
-        logger.info("Done Training in {}".format(str(datetime.timedelta(seconds=time.time()-start))))
+        agent.learn()
+        logger.info("Done Training in {}".format(str(datetime.timedelta(seconds=time.time() - start))))
 
     if args.do_test:
+
+        agent = Agent(args, expert_buffer, gail_discriminator)
         logger.info("Testing .......")
-        agent.load_model(args.param_dir)
+
+        # TODO: Save and Load the Normaliser stats
+        agent.load_model(args.test_param_dir)
 
         test_env = get_PnP_env(args)
         # While testing, we do not want DDPG policy to explore since it is a deterministic policy. Thus exploit=True
@@ -675,9 +651,16 @@ def run(args, store_data_path=None):
                                     exploit=True, noise_eps=0., random_eps=0., compute_Q=True,
                                     use_target_net=False, render=True)
 
+        # HACK: Generate and store expert data to compute normalisation stats for Policy
+        for i in range(args.expert_demos):
+            # print("\nGenerating demo:", i + 1)
+            expert_worker.policy.reset()
+            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
+            agent.policy.store_episode(_episode)
+
         # To show policy
         for i in range(args.test_demos):
             print("\nShowing demo:", i + 1)
-            _, pol_stats = test_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
+            ep, pol_stats = test_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
 
     sys.exit(-1)
