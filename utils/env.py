@@ -25,6 +25,13 @@ def get_PnP_env(args):
     return env
 
 
+def save_env_img(env: MyPnPEnvWrapperForGoalGAIL, path_to_save="./env_curr_state.png"):
+    img = env._env.render(mode="rgb_array", width=2000, height=2000)
+    from PIL import Image
+    im = Image.fromarray(img)
+    im.save(path_to_save)
+
+
 def get_config_env(args):
     env = get_PnP_env(args)
     obs, ag, g = env.reset()
@@ -33,6 +40,9 @@ def get_config_env(args):
     args.s_dim = obs.shape[0]
     args.a_dim = env.action_space.shape[0]
     args.action_max = float(env.action_space.high[0])
+    
+    args.c_dim = 5 if args.two_object else 3  # In a way defines number of skills
+    
     return args
 
 

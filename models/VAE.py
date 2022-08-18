@@ -13,9 +13,9 @@ from utils.buffer import get_buffer_shape
 from domains.PnP import MyPnPEnvWrapperForGoalGAIL, PnPExpert, PnPExpertTwoObj
 from her.rollout import RolloutWorker
 from her.replay_buffer import ReplayBufferTf
-from her.transitions import sample_random_consecutive_transitions, sample_all_consecutive_transitions
+from her.transitions import sample_rnd_consecutive_transitions, sample_all_consecutive_transitions, sample_her_fwd_bkd_transitions
 from utils.debug import debug
-from networks.vae import Encoder, Decoder
+from networks.vae import Encoder, Decoder, Policy
 from utils.vae import kl_divergence_gaussian, kl_divergence_unit_gaussian
 from utils.plot import plot_metric, plot_metrics
 
@@ -26,8 +26,9 @@ class ClassicVAE(tf.keras.Model):
     def __init__(self, args, norm_s: Normalizer, norm_g: Normalizer):
         super(ClassicVAE, self).__init__()
         self.args = args
-        self.encoder = Encoder(args.g_dim)
-        self.decoder = Decoder(args.a_dim, args.action_max)
+        self.encoder = Encoder(args.z_dim)
+        self.decoder = Decoder(args.g_dim)
+        self.policy = Policy(args.a_dim, args.action_max)
         self.optimiser = tf.keras.optimizers.Adam(self.args.vae_lr)
 
         self.norm_s = norm_s
@@ -41,32 +42,53 @@ class ClassicVAE(tf.keras.Model):
 
     @tf.function
     def compute_loss(self, data):
-        # INFERENCE: Compute the approximate posterior q(z|x)
-        [post_locs, post_scales] = self.encoder(data['achieved_goals'], data['states'], data['goals'])
-        delta_g = self.sample_normal(post_locs, post_scales, self.args.g_dim)
+        
+        # ######################################## Goal Transitioning Network ########################################
+        # INFERENCE: Compute the approximate posterior q(z|s_t, G)
+        [post_locs, post_scales] = self.encoder(data['states'], data['goals'])
+        z_g = self.sample_normal(post_locs, post_scales, self.args.z_dim)
     
-        # Add layer - Skip Connection
-        pred_goals = data['achieved_goals'] + delta_g
+        # GENERATION: Compute the log-likelihood of actions i.e. p(delta_g|z)
+        delta_g = self.decoder(z_g)
     
-        # GENERATION: Compute the log-likelihood of actions i.e. p(x|z)
-        action_mus = self.decoder(data['states'], pred_goals)
-    
-        # Obj: max (ELBO = Log_Likelihood-KL_Divergence)
-        ll = -tf.reduce_sum(tf.math.squared_difference(action_mus, data['actions']), axis=-1)
+        # Obj: max (ELBO = Log_Likelihood - KL_Divergence)
+        ll = -tf.reduce_sum(tf.math.squared_difference(data['delta_g'], delta_g), axis=-1)
         kl = kl_divergence_unit_gaussian(mu=post_locs, log_sigma_sq=tf.math.log(post_scales + self.args.underflow_eps),
                                          mean_batch=False)
         elbo = ll - kl
-        loss = tf.reduce_mean(-elbo)
-        return loss, tf.reduce_mean(-ll), tf.reduce_mean(kl)
+        loss_g = -elbo
+        
+        # ############################################## Policy Network ###############################################
+        pred_future_ag = data['achieved_goals'] + delta_g
+        actions_mu = self.policy(data['states'], pred_future_ag)
+        loss_p = tf.reduce_sum(tf.math.squared_difference(data['actions'], actions_mu), axis=-1)
+        
+        total_loss = tf.reduce_mean(loss_g + loss_p)
+        
+        return total_loss,  tf.reduce_mean(loss_g), tf.reduce_mean(-ll), tf.reduce_mean(kl),  tf.reduce_mean(loss_p)
+    
+    @tf.function
+    def do_eval(self, data):
+        # INFERENCE: Compute the approximate posterior q(z|s_t, G)
+        [post_locs, post_scales] = self.encoder(data['states'], data['goals'])
+        z_g = self.sample_normal(post_locs, post_scales, self.args.z_dim)
+    
+        # GENERATION: Compute the log-likelihood of actions i.e. p(delta_g|z)
+        delta_g = self.decoder(z_g)
 
+        pred_future_ag = data['achieved_goals'] + delta_g
+        actions_mu = self.policy(data['states'], pred_future_ag)
+        loss_p = tf.reduce_sum(tf.math.squared_difference(data['actions'], actions_mu), axis=-1)
+        return tf.reduce_mean(loss_p)
+        
     @tf.function(experimental_relax_shapes=True)
     def train(self, data):
         with tf.GradientTape() as tape:
-            loss, act_loss, kl_div = self.compute_loss(data)
+            total_loss, vae_loss, kl_div, loss_delta, policy_loss = self.compute_loss(data)
     
-        gradients = tape.gradient(loss, self.trainable_variables)
+        gradients = tape.gradient(total_loss, self.trainable_variables)
         self.optimiser.apply_gradients(zip(gradients, self.trainable_variables))
-        return loss, act_loss, kl_div
+        return total_loss, vae_loss, kl_div, loss_delta, policy_loss
     
     def act(self, state, achieved_goal, goal, compute_Q=False, **kwargs):
         # Pre-process the state and goals
@@ -75,43 +97,54 @@ class ClassicVAE(tf.keras.Model):
         goal = tf.clip_by_value(goal, -self.args.clip_obs, self.args.clip_obs)
     
         # Normalise (if running stats of Normaliser are updated, we get normalised data else un-normalised data)
-        state = self.norm_s.normalize(state)
-        achieved_goal = self.norm_g.normalize(achieved_goal)
-        goal = self.norm_g.normalize(goal)
+        if self.args.use_norm:
+            state = self.norm_s.normalize(state)
+            achieved_goal = self.norm_g.normalize(achieved_goal)
+            goal = self.norm_g.normalize(goal)
 
-        [post_locs, post_scales] = self.encoder(achieved_goal, state, goal)
-        delta_g = self.sample_normal(post_locs, post_scales, self.args.g_dim)
+        [post_locs, post_scales] = self.encoder(state, goal)
+        z_g = self.sample_normal(post_locs, post_scales, self.args.z_dim)
+        
+        delta_g = self.decoder(z_g)
 
         # Add layer - Skip Connection
-        pred_goals = achieved_goal + delta_g
+        pred_goal = achieved_goal + delta_g
 
-        action_mu = self.decoder(state, pred_goals)
+        action_mu = self.policy(state, pred_goal)
         action = tf.clip_by_value(action_mu, -self.args.action_max, self.args.action_max)
         if compute_Q:
             return action, delta_g
         return action
     
-    def load_model(self, param_dir):
-        encoder_model_path = os.path.join(param_dir, "encoder_classicVAE.h5")
+    def load_model(self, dir_param):
+        encoder_model_path = os.path.join(dir_param, "encoder_classicVAE.h5")
         if not os.path.exists(encoder_model_path):
             logger.info("Encoder Weights Not Found at {}. Exiting!".format(encoder_model_path))
             sys.exit(-1)
     
-        decoder_model_path = os.path.join(param_dir, "decoder_classicVAE.h5")
+        decoder_model_path = os.path.join(dir_param, "decoder_classicVAE.h5")
         if not os.path.exists(decoder_model_path):
             logger.info("Decoder Weights Not Found at {}. Exiting!".format(decoder_model_path))
+            sys.exit(-1)
+
+        policy_model_path = os.path.join(dir_param, "policy_classicVAE.h5")
+        if not os.path.exists(policy_model_path):
+            logger.info("Decoder Weights Not Found at {}. Exiting!".format(policy_model_path))
             sys.exit(-1)
     
         # Load Models
         self.encoder.load_weights(encoder_model_path)
         self.decoder.load_weights(decoder_model_path)
+        self.policy.load_weights(policy_model_path)
     
         logger.info("Encoder Weights Loaded from {}.".format(encoder_model_path))
         logger.info("Decoder Weights Loaded from {}.".format(decoder_model_path))
+        logger.info("Policy Weights Loaded from {}.".format(policy_model_path))
     
-    def save_model(self, param_dir):
-        self.encoder.save_weights(os.path.join(param_dir, "encoder_classicVAE.h5"), overwrite=True)
-        self.decoder.save_weights(os.path.join(param_dir, "decoder_classicVAE.h5"), overwrite=True)
+    def save_model(self, dir_param):
+        self.encoder.save_weights(os.path.join(dir_param, "encoder_classicVAE.h5"), overwrite=True)
+        self.decoder.save_weights(os.path.join(dir_param, "decoder_classicVAE.h5"), overwrite=True)
+        self.policy.save_weights(os.path.join(dir_param, "policy_classicVAE.h5"), overwrite=True)
         
 
 class Agent(object):
@@ -120,22 +153,23 @@ class Agent(object):
         self.args = args
 
         # Define the Buffers
-        self.transition_fn = sample_random_consecutive_transitions
+        self.transition_fn = sample_her_fwd_bkd_transitions
         self.expert_buffer = expert_buffer
         self.val_buffer = val_buffer
 
         # Define Tensorboard for logging Losses and Other Metrics
-        if not os.path.exists(args.summary_dir):
-            os.makedirs(args.summary_dir)
+        if not os.path.exists(args.dir_summary):
+            os.makedirs(args.dir_summary)
             
-        if not os.path.exists(args.plot_dir):
-            os.makedirs(args.plot_dir)
-        self.summary_writer = tf.summary.create_file_writer(args.summary_dir)
+        if not os.path.exists(args.dir_plot):
+            os.makedirs(args.dir_plot)
+        self.summary_writer = tf.summary.create_file_writer(args.dir_summary)
         
         # Setup Normalisers
         self.norm_s = Normalizer(args.s_dim, args.eps_norm, args.clip_norm)
         self.norm_g = Normalizer(args.g_dim, args.eps_norm, args.clip_norm)
-        self.setup_normalisers()
+        if args.use_norm:
+            self.setup_normalisers()
         
         # Declare Model
         self.model = ClassicVAE(args, self.norm_s, self.norm_g)
@@ -171,40 +205,45 @@ class Agent(object):
         """Update learning rate."""
         pass
 
-    def load_model(self, param_dir):
+    def load_model(self, dir_param):
 
         # BUILD First
-        _ = self.model.encoder(np.ones([1, self.args.g_dim]), np.ones([1, self.args.s_dim]), np.ones([1, self.args.g_dim]))
-        _ = self.model.decoder(np.ones([1, self.args.s_dim]), np.ones([1, self.args.g_dim]))
+        _ = self.model.encoder(np.ones([1, self.args.s_dim]), np.ones([1, self.args.g_dim]))
+        _ = self.model.decoder(np.ones([1, self.args.z_dim]))
+        _ = self.model.policy(np.ones([1, self.args.s_dim]), np.ones([1, self.args.g_dim]))
 
         # Load Models
-        self.model.load_model(param_dir)
+        self.model.load_model(dir_param)
 
-    def save_model(self, param_dir):
+    def save_model(self, dir_param):
 
-        if not os.path.exists(param_dir):
-            os.makedirs(param_dir)
+        if not os.path.exists(dir_param):
+            os.makedirs(dir_param)
 
         # Save weights
-        self.model.save_model(param_dir)
+        self.model.save_model(dir_param)
 
     @tf.function
-    def process_data(self, transitions, expert=False, is_supervised=False, normalise=True):
+    def process_data(self, transitions, expert=False, is_supervised=False):
         
         transitions_copy = transitions.copy()
         states, achieved_goals, goals = transitions_copy['states'], transitions_copy['achieved_goals'], transitions_copy['goals']
+        inter_goals = transitions_copy['inter_goals']
         
         # Process the states and goals
         states, achieved_goals, goals = self.preprocess_og(states, achieved_goals, goals)
+        _, inter_goals, _ = self.preprocess_og(states, inter_goals, goals)
     
-        if normalise:
+        if self.args.use_norm:
             # Normalise before the actor-critic networks are exposed to data
             transitions_copy['states'] = self.norm_s.normalize(states)
             transitions_copy['achieved_goals'] = self.norm_g.normalize(achieved_goals)
+            transitions_copy['inter_goals'] = self.norm_g.normalize(inter_goals)
             transitions_copy['goals'] = self.norm_g.normalize(goals)
         else:
             transitions_copy['states'] = states
             transitions_copy['achieved_goals'] = achieved_goals
+            transitions_copy['inter_goals'] = inter_goals
             transitions_copy['goals'] = goals
     
         # Define if the transitions are from expert or not/are supervised or not
@@ -212,7 +251,10 @@ class Agent(object):
                                                                                      dtype=tf.int32)
         transitions_copy['is_sup'] = tf.cast(is_supervised, dtype=tf.int32) * tf.ones_like(transitions_copy['successes'],
                                                                                            dtype=tf.int32)
-    
+        
+        # Compute the difference between current achieved goal and a future goal to achieve
+        transitions_copy['delta_g'] = transitions_copy['inter_goals'] - transitions_copy['achieved_goals']
+        
         # Make sure the data is of type tf.float32
         for key in transitions_copy.keys():
             transitions_copy[key] = tf.cast(transitions_copy[key], dtype=tf.float32)
@@ -233,7 +275,7 @@ class Agent(object):
         global_step = 0
         
         monitor_metric = np.inf
-        val_transitions = None
+        val_trans = None
         
         with tqdm(total=args.num_epochs, position=0, leave=True, desc='Training: ') as pbar:
 
@@ -243,107 +285,172 @@ class Agent(object):
                     data = self.sample_data(expert_batch_size=tf.constant(args.expert_batch_size, dtype=tf.int32))
 
                     # Train Policy on each batch
-                    loss, act_loss, kl_div = self.model.train(data)
+                    train_losses = self.model.train(data)
+                    total_loss, vae_loss, kl_div, delta_loss, policy_loss = train_losses
 
                     # Log the VAE Losses
                     with self.summary_writer.as_default():
-                        tf.summary.scalar('loss/train/total', loss, step=global_step)
-                        tf.summary.scalar('loss/train/act_loss', act_loss, step=global_step)
-                        tf.summary.scalar('loss/train/kl_div', kl_div, step=global_step)
+                        tf.summary.scalar('train/loss/total', total_loss, step=global_step)
+                        tf.summary.scalar('train/loss/vae', vae_loss, step=global_step)
+                        tf.summary.scalar('train/loss/vae/kl_div', kl_div, step=global_step)
+                        tf.summary.scalar('train/loss/vae/delta_ag', delta_loss, step=global_step)
+                        tf.summary.scalar('train/loss/policy', policy_loss, step=global_step)
 
-                    pbar.set_postfix(Loss=loss.numpy(), refresh=True)
+                    pbar.set_postfix(Loss=total_loss.numpy(), refresh=True)
                     global_step += 1
                 
                 pbar.update(1)
 
                 # Save Last Model (post-epoch)
-                self.save_model(args.param_dir)
+                self.save_model(args.dir_param)
 
                 if args.do_eval:
                     
                     # Compute Validation Losses
-                    if val_transitions is None:
+                    if val_trans is None:
                         val_episodic_data = self.val_buffer.sample_episodes()
                         # Transition Fn for val buffer giving error while tracing, so calling it out in eager mode
-                        val_transitions = self.val_buffer.transition_fn(val_episodic_data, tf.constant(0, dtype=tf.int32))
-                        val_transitions = self.process_data(val_transitions, expert=tf.constant(True, dtype=tf.bool),
-                                                            is_supervised=tf.constant(True, dtype=tf.bool))
-                    val_loss, act_loss, kl_div = self.model.compute_loss(val_transitions)
+                        val_trans = self.val_buffer.transition_fn(val_episodic_data, tf.constant(0, dtype=tf.int32))
+                        s, ag, g = val_trans['states'], val_trans['achieved_goals'], val_trans['goals']
+                        s, ag, g = self.preprocess_og(s, ag, g)
+                        if self.args.use_norm:
+                            # Normalise before the actor-critic networks are exposed to data
+                            val_trans['states'] = self.norm_s.normalize(s)
+                            val_trans['achieved_goals'] = self.norm_g.normalize(ag)
+                            val_trans['goals'] = self.norm_g.normalize(g)
+                        else:
+                            val_trans['states'] = s
+                            val_trans['achieved_goals'] = ag
+                            val_trans['goals'] = g
+
+                        # Make sure the data is of type tf.float32
+                        for key in val_trans.keys():
+                            val_trans[key] = tf.cast(val_trans[key], dtype=tf.float32)
+                            
+                    val_policy_loss = self.model.do_eval(val_trans)
                     
                     # Log Validation Losses
                     with self.summary_writer.as_default():
-                        tf.summary.scalar('loss/val/total', val_loss, step=epoch)
-                        tf.summary.scalar('loss/val/act_loss', act_loss, step=epoch)
-                        tf.summary.scalar('loss/val/kl_div', kl_div, step=epoch)
+                        tf.summary.scalar('val/loss/policy', val_policy_loss, step=epoch)
 
                     if (epoch + 1) % args.log_interval == 0:
+    
+                        # Clear the worker's history to avoid retention of poor perf. during early training
+                        self.eval_rollout_worker.clear_history()
                         
                         # Do rollouts using VAE Policy
                         for n in range(args.eval_demos):
                             episode, eval_stats = self.eval_rollout_worker.generate_rollout(
                                 slice_goal=(3, 6) if args.full_space_as_goal else None)
         
-                            fig_path = os.path.join(args.plot_dir, 'Distances_{}_{}.png'.format(epoch + 1, n))
-                            delta_ag = np.linalg.norm(episode['quality'].numpy()[0], axis=-1)
-                            plot_metrics(metrics=[episode['distances'].numpy()[0], delta_ag],
-                                         labels=['|AG-G|', 'delta_AG'], fig_path=fig_path,
+                            # Monitor the metrics during each episode
+                            delta_AG = np.linalg.norm(episode['quality'].numpy()[0], axis=-1)
+                            delta_G = np.linalg.norm(episode['goals'].numpy()[0] -
+                                                     (episode['achieved_goals'].numpy()[0, :args.horizon] +
+                                                      episode['quality'].numpy()[0]), axis=-1)
+                            fig_path = os.path.join(args.dir_plot, 'Distances_{}_{}.png'.format(epoch + 1, n))
+                            plot_metrics(metrics=[episode['distances'].numpy()[0], delta_AG, delta_G],
+                                         labels=['|G_env - AG_curr|', '|G_pred - AG_curr|', '|G_pred - G_env|'],
+                                         fig_path=fig_path,
                                          y_label='Distances', x_label='Steps')
-                            with self.summary_writer.as_default():
-                                tf.summary.scalar('stats/Eval/Success_rate', eval_stats['success_rate'], step=epoch)
+                        
+                        # Plot avg. success rate for each epoch
+                        with self.summary_writer.as_default():
+                            tf.summary.scalar('stats/Eval/Success_rate', eval_stats['success_rate'], step=epoch)
                         
                     # Monitor Loss for saving the best model
-                    if act_loss.numpy() < monitor_metric:
-                        monitor_metric = act_loss.numpy()
-                        logger.info("Saving the best model (best act_loss: {}) at epoch: {}".format(monitor_metric,
-                                                                                                    epoch+1))
-                        self.save_model(args.param_dir + '_best')
+                    if val_loss.numpy() < monitor_metric:
+                        monitor_metric = val_loss.numpy()
+                        logger.info("Saving the best model (best policy_loss: {}) at epoch: {}".format(monitor_metric,
+                                                                                                       epoch+1))
+                        self.save_model(args.dir_param + '_best')
 
 
-def run(args, store_data_path=None):
+def run(args):
     
     # Two Object Env: target_in_the_air activates only for 2-object case
     exp_env = get_PnP_env(args)
 
-    # Load Expert Policy
+    # ############################################# EXPERT POLICY ############################################# #
     if args.two_object:
         expert_policy = PnPExpertTwoObj(exp_env, args.full_space_as_goal, expert_behaviour=args.expert_behaviour)
     else:
         expert_policy = PnPExpert(exp_env, args.full_space_as_goal)
     
-    # Load Buffer to store expert data
-    expert_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon, sample_random_consecutive_transitions)
-    val_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon, sample_all_consecutive_transitions)
-    
     # Initiate a worker to generate expert rollouts
     expert_worker = RolloutWorker(exp_env, expert_policy, T=args.horizon, rollout_terminate=args.rollout_terminate,
-                                  exploit=True, noise_eps=0., random_eps=0., compute_Q=False, use_target_net=False,
-                                  render=False)
+                                  is_expert=True, exploit=True, noise_eps=0., random_eps=0., compute_Q=False,
+                                  use_target_net=False, render=False)
+
+    # ############################################# DATA TRAINING ############################################# #
+    # Load Buffer to store expert data
+    expert_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon,
+                                   sample_her_fwd_bkd_transitions)
+    num_train_episodes = int(args.expert_demos * args.perc_train)
     
-    if args.do_train:
-        start = time.time()
-        exp_stats = {'success_rate': 0.}
-        logger.info("Generating {} Expert Demos.".format(args.expert_demos))
+    train_data_path = os.path.join(args.dir_data, '{}_train.pkl'.format('two_obj' if args.two_object else 'single_obj'))
+    env_state_dir = os.path.join(args.dir_data,
+                                 '{}_env_states_train'.format('two_obj' if args.two_object else 'single_obj'))
+    if not os.path.exists(env_state_dir):
+        os.makedirs(env_state_dir)
         
-        num_train_episodes = int(args.expert_demos * args.perc_train)
+    if not os.path.exists(train_data_path):
+        exp_stats = {'success_rate': 0.}
+        logger.info("Generating {} Expert Demos for training.".format(num_train_episodes))
+    
         # Generate and store expert training data
         for i in range(num_train_episodes):
+            # Expert Policy Needs to be reset everytime
             expert_worker.policy.reset()
-            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
+            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None,
+                                                                 path_to_init_state_dict=os.path.join(env_state_dir,
+                                                                                                      'env_{}.pkl'.format(
+                                                                                                          i)))
             expert_buffer.store_episode(_episode)
-
-        # Generate and store expert validation data
-        for i in range(args.expert_demos - num_train_episodes):
-            expert_worker.policy.reset()
-            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
-            val_buffer.store_episode(_episode)
-
-        plot_metric(_episode['distances'].numpy()[0], fig_path=os.path.join(args.root_log_dir, 'Sample(Expert).png'),
+    
+        expert_buffer.save_buffer_data(train_data_path)
+        logger.info("Saved Expert Demos at {} training.".format(train_data_path))
+    
+        plot_metric(_episode['distances'].numpy()[0], fig_path=os.path.join(args.dir_root_log, 'Sample(Expert).png'),
                     y_label='Distances', x_label='Steps')
-        logger.info("Expert Demos generated in {}.".format(str(datetime.timedelta(seconds=time.time() - start))))
         logger.info("Expert Policy Success Rate: {}".format(exp_stats['success_rate']))
 
-        if store_data_path:
-            expert_buffer.save_buffer_data(path=store_data_path)
+    else:
+        logger.info("Loading Expert Demos from {} into TrainBuffer for training.".format(train_data_path))
+        expert_buffer.load_data_into_buffer(train_data_path)
+
+    # ############################################# DATA VALIDATION ############################################# #
+    val_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon,
+                                sample_all_consecutive_transitions)
+    num_val_episodes = args.expert_demos - num_train_episodes
+    
+    val_data_path = os.path.join(args.dir_data, '{}_val.pkl'.format('two_obj' if args.two_object else 'single_obj'))
+    env_state_dir = os.path.join(args.dir_data,
+                                 '{}_env_states_val'.format('two_obj' if args.two_object else 'single_obj'))
+    if not os.path.exists(env_state_dir):
+        os.makedirs(env_state_dir)
+    
+    if not os.path.exists(val_data_path) and num_val_episodes:
+        logger.info("Generating {} Expert Demos for validation.".format(num_val_episodes))
+    
+        # Generate and store expert validation data
+        for i in range(num_val_episodes):
+            expert_worker.policy.reset()
+            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None,
+                                                                 path_to_init_state_dict=os.path.join(env_state_dir,
+                                                                                                      'env_{}.pkl'.format(
+                                                                                                          i)))
+            val_buffer.store_episode(_episode)
+    
+        val_buffer.save_buffer_data(val_data_path)
+        logger.info("Saved Expert Demos at {} for validation.".format(val_data_path))
+
+    elif os.path.exists(val_data_path) and num_val_episodes:
+        logger.info("Loading Expert Demos from {} into ValBuffer for validation.".format(val_data_path))
+        val_buffer.load_data_into_buffer(val_data_path)
+
+    # ############################################# TRAINING #################################################### #
+    if args.do_train:
 
         start = time.time()
         agent = Agent(args, expert_buffer, val_buffer)
@@ -352,4 +459,50 @@ def run(args, store_data_path=None):
         agent.learn()
         logger.info("Done Training in {}".format(str(datetime.timedelta(seconds=time.time() - start))))
 
+    # ############################################# TESTING #################################################### #
+    if args.do_verify:
+        tf.config.run_functions_eagerly(True)  # To render, must run eagerly
+        test_env = get_PnP_env(args)
+        agent_test = Agent(args, expert_buffer, val_buffer)
+        logger.info("Loading Model Weights from {}".format(args.dir_test))
+        agent_test.load_model(dir_param=args.dir_test)
+        test_rollout_worker = RolloutWorker(test_env, agent_test.model, T=args.horizon,
+                                            rollout_terminate=args.rollout_terminate,
+                                            exploit=True, noise_eps=0., random_eps=0.,
+                                            compute_Q=True, use_target_net=False, render=False)
+        
+        env_state_dir = os.path.join(args.dir_data,
+                                     '{}_env_states_train'.format('two_obj' if args.two_object else 'single_obj'))
+        env_state_paths = [os.path.join(env_state_dir, 'env_{}.pkl'.format(n)) for n in range(args.test_demos)]
+
+        for n in range(args.test_demos):
+            _episode, _ = test_rollout_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None,
+                                                               forced_reset=True,
+                                                               path_to_init_state_dict=env_state_paths[n])
+    
+            # Compute the cosine similarity metric
+            indices = tf.stack((tf.zeros(50, dtype=tf.int32), tf.range(50, dtype=tf.int32)), axis=-1)
+            g = tf.gather_nd(_episode['goals'], indices)
+            ag = tf.gather_nd(_episode['achieved_goals'], indices)
+            deltag = g - ag
+            deltag_norm = tf.math.l2_normalize(deltag, axis=-1)
+            
+            deltag_pred = tf.gather_nd(_episode['quality'], indices)
+            deltag_pred_norm = tf.math.l2_normalize(deltag_pred, axis=-1)
+            cosine_sim = tf.reduce_sum(tf.multiply(deltag_norm, deltag_pred_norm), axis=-1)
+            
+            # Monitor the metrics during each episode
+            delta_AG = np.linalg.norm(_episode['quality'].numpy()[0], axis=-1)
+
+            delta_G = np.linalg.norm(_episode['goals'].numpy()[0] -
+                                     (_episode['achieved_goals'].numpy()[0, :args.horizon] +
+                                      _episode['quality'].numpy()[0]), axis=-1)
+            
+            fig_path = os.path.join(args.dir_plot, 'TestMetrics_{}.png'.format(n))
+            plot_metrics(metrics=[_episode['distances'].numpy()[0], delta_AG, delta_G, cosine_sim.numpy()],
+                         labels=['|G_env - AG_curr|', '|G_pred - AG_curr|', '|G_pred - G_env|',
+                                 'cos(G_pred - AG_curr, G_env - AG_curr)'],
+                         fig_path=fig_path,
+                         y_label='Metrics', x_label='Steps')
+            
     sys.exit(-1)

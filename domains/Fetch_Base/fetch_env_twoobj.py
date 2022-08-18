@@ -175,6 +175,26 @@ class FetchEnv(robot_env.RobotEnv):
         self.sim.forward()
         return True
 
+    def forced_reset(self, state_dict):
+    
+        # Set State
+        initial_state = state_dict['state']
+        self.sim.set_state(initial_state)
+        self.sim.forward()
+    
+        # Set Goal
+        self.goal = state_dict['goal']
+        obs = self._get_obs()
+        return obs
+
+    def get_state_dict(self):
+        state = self.sim.get_state()
+        goal = self.goal
+        return {
+            'state': state,
+            'goal': goal
+        }
+
     def _sample_goal(self):
         if self.has_object:
 
@@ -226,7 +246,7 @@ class FetchEnv(robot_env.RobotEnv):
             # [HERE] Set goals for stacking
             else:
                 goal1 = np.copy(goal0)
-                goal1[2] = goal0[2] + 0.05  # TODO: figure out if it's 0.025 or 0.05 (0.025 not working, goals too close)
+                goal1[2] = goal0[2] + 0.05  # TODO: figure out if it's .025 or .05 (0.025 not working, goals too close)
 
             goal = np.concatenate([goal0, goal1])
         else:

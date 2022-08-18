@@ -7,6 +7,8 @@ def get_buffer_shape(args):
         'goals': (args.horizon, args.g_dim),
         'actions': (args.horizon, args.a_dim),
         'successes': (args.horizon,),
-        'distances': (args.horizon, )
+        'distances': (args.horizon, ),
+        'latent_modes': (args.horizon, args.c_dim)
     }
     return buffer_shape
+

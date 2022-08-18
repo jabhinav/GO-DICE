@@ -126,11 +126,14 @@ class ReplayBufferTf:
         with open(path, 'wb') as handle:
             pickle.dump(buffered_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    def load_data_into_buffer(self, path_to_data):
+    def load_data_into_buffer(self, path_to_data, clear_buffer=True):
+        
         import pickle
         with open(path_to_data, 'rb') as handle:
             buffered_data = pickle.load(handle)
-        self.clear_buffer()
+        
+        if clear_buffer:
+            self.clear_buffer()
 
         # Check if all tensors are present in loaded data
         data_sizes = [len(buffered_data[key]) for key in self.buffer_keys]
@@ -140,7 +143,8 @@ class ReplayBufferTf:
         values = [buffered_data[key] for key in self.buffer_keys]
 
         self.table.write(rows=idxs, values=values)
-        self.n_transitions_stored += len(idxs)*self.T
+        self.n_transitions_stored.assign(self.n_transitions_stored + len(idxs)*self.T)
+        logger.info("Loaded {} episodes into the buffer.".format(len(idxs)))
 
 
 class ReplayBuffer:

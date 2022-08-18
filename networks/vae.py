@@ -3,19 +3,21 @@ from keras.layers import Dense, Flatten
 
 
 class Encoder(tf.keras.Model):
-    def __init__(self, g_dim):
+    def __init__(self, z_dim):
         super(Encoder, self).__init__()
         self.flatten = Flatten()
         self.fc1 = Dense(units=256, activation=tf.nn.relu)
         self.fc2 = Dense(units=256, activation=tf.nn.relu)
+        self.fc3 = Dense(units=128, activation=tf.nn.relu)
 
-        self.locs_out = Dense(units=g_dim, activation=tf.nn.relu)
-        self.std_out = Dense(units=g_dim, activation=tf.nn.softplus)
+        self.locs_out = Dense(units=z_dim, activation=tf.nn.relu)
+        self.std_out = Dense(units=z_dim, activation=tf.nn.softplus)
 
-    def call(self, achieved_goal, curr_state, final_goal):
-        ip = tf.concat([achieved_goal, curr_state, final_goal], axis=1)
-        h = self.fc1(ip)
+    def call(self, *ip):
+        x = tf.concat([*ip], axis=1)
+        h = self.fc1(x)
         h = self.fc2(h)
+        h = self.fc3(h)
 
         locs = self.locs_out(h)
 
@@ -27,17 +29,37 @@ class Encoder(tf.keras.Model):
 
 
 class Decoder(tf.keras.Model):
-    def __init__(self, a_dim, actions_max):
+    def __init__(self, g_dim):
         super(Decoder, self).__init__()
+
+        self.fc1 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
+        self.fc2 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
+        self.fc3 = Dense(units=128, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
+        self.out = Dense(units=g_dim, activation=tf.nn.tanh, kernel_initializer=tf.keras.initializers.GlorotUniform())
+
+    def call(self, *ip):
+        x = tf.concat([*ip], axis=1)
+        h = self.fc1(x)
+        h = self.fc2(h)
+        h = self.fc3(h)
+        op = self.out(h)
+        return op
+    
+    
+class Policy(tf.keras.Model):
+    def __init__(self, a_dim, actions_max):
+        super(Policy, self).__init__()
 
         self.max_actions = actions_max
         self.fc1 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
         self.fc2 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
+        self.fc3 = Dense(units=128, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
         self.a_out = Dense(units=a_dim, activation=tf.nn.tanh, kernel_initializer=tf.keras.initializers.GlorotUniform())
 
-    def call(self, curr_state, goal_state):
-        ip = tf.concat([curr_state, goal_state], axis=1)
-        h = self.fc1(ip)
+    def call(self, *ip):
+        x = tf.concat([*ip], axis=1)
+        h = self.fc1(x)
         h = self.fc2(h)
+        h = self.fc3(h)
         actions = self.a_out(h) * self.max_actions
         return actions

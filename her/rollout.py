@@ -1,5 +1,7 @@
 import logging
+import sys
 import time
+import pickle
 import numpy as np
 from domains.PnP import MyPnPEnvWrapperForGoalGAIL
 from mujoco_py import MujocoException
@@ -11,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class RolloutWorker:
-    def __init__(self, env: MyPnPEnvWrapperForGoalGAIL, policy, T, rollout_terminate=True,
+    def __init__(self, env: MyPnPEnvWrapperForGoalGAIL, policy, T, rollout_terminate=True, is_expert=False,
                  exploit=False, noise_eps=0., random_eps=0., compute_Q=False, use_target_net=False, render=False,
                  history_len=100):
         """
@@ -29,6 +31,7 @@ class RolloutWorker:
             history_len (int): length of history for statistics smoothing
         """
         self.env = env
+        self.is_expert = is_expert
         self.policy = policy
         self.horizon = T
         self.rollout_terminate = rollout_terminate
@@ -49,7 +52,7 @@ class RolloutWorker:
         self.use_target_net = use_target_net
 
         self.render = render
-        self.init_state = None
+        self.resume_state = None
 
     @tf.function
     def reset_rollout(self, reset=True):
@@ -61,19 +64,25 @@ class RolloutWorker:
             curr_state, curr_ag, curr_g = tf.numpy_function(func=self.env.reset, inp=[self.render],
                                                             Tout=(tf.float32, tf.float32, tf.float32))
         else:
-            if self.init_state is None:
+            if self.resume_state is None:
                 curr_state, curr_ag, curr_g = tf.numpy_function(func=self.env.reset, inp=[self.render],
                                                                 Tout=(tf.float32, tf.float32, tf.float32))
             else:
                 # The env won't be reset, the environment would be at its last reached position
-                curr_state = self.init_state.copy()
+                curr_state = self.resume_state.copy()
                 curr_ag = self.env.transform_to_goal_space(curr_state)
                 curr_g = self.env.current_goal
 
         return curr_state, curr_ag, curr_g
 
+    def force_reset_rollout(self, init_state_dict):
+        # curr_state, curr_ag, curr_g = tf.numpy_function(func=self.env.forced_reset, inp=[init_state_dict, self.render],
+        #                                                 Tout=(tf.float32, tf.float32, tf.float32))
+        curr_state, curr_ag, curr_g = self.env.forced_reset(init_state_dict, self.render)
+        return curr_state, curr_ag, curr_g
+
     @tf.function
-    def generate_rollout(self, reset=True, slice_goal=None):
+    def generate_rollout(self, reset=True, slice_goal=None, init_state_dict=None):
         debug("generate_rollout")
 
         # generate episodes
@@ -84,13 +93,28 @@ class RolloutWorker:
         goals = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         actions = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         
+        latent_modes = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
+        
         successes = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         quality = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
         distances = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
 
         # Initialize the environment
-        curr_state, curr_ag, curr_g = self.reset_rollout(reset=reset)
-
+        if init_state_dict is not None:
+            try:
+                curr_state, curr_ag, curr_g = self.force_reset_rollout(init_state_dict)
+            
+            except MujocoException as _:
+                logging.error("Some Error occurred while loading initial state in the environment!")
+                sys.exit(-1)
+            
+        else:
+            curr_state, curr_ag, curr_g = self.reset_rollout(reset=reset)
+            init_state_dict = self.env.get_state_dict()
+            
+            # print(init_state_dict['goal'])
+            # tf.print("Rollout: {}".format(init_state_dict['goal']))
+            
         # Initialise other variables that will be computed
         action, value = tf.zeros(shape=(self.env.action_space.shape[0],)), tf.zeros(shape=(1,))
 
@@ -111,12 +135,15 @@ class RolloutWorker:
                                  use_target_net=self.use_target_net)
             if self.compute_Q:
                 action, value = op
-            else:
-                action = op
-            
-            actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
-            if self.compute_Q:
+                actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
                 quality = quality.write(t, tf.squeeze(tf.cast(value, dtype=tf.float32)))
+            else:
+                if self.is_expert:
+                    action, latent_mode = op
+                    latent_modes = latent_modes.write(t, tf.squeeze(tf.cast(latent_mode, dtype=tf.float32)))
+                else:
+                    action = op
+                actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
 
             # Apply action to the environment to get next state and reward
             try:
@@ -147,7 +174,7 @@ class RolloutWorker:
         achieved_goals = achieved_goals.write(self.horizon, tf.squeeze(curr_ag))
 
         # Save the last state for the next episode [if reqd.]
-        self.init_state = curr_state
+        self.resume_state = curr_state
 
         states = states.stack()
         achieved_goals = achieved_goals.stack()
@@ -155,6 +182,8 @@ class RolloutWorker:
         achieved_goals_2 = achieved_goals_2.stack()
         goals = goals.stack()
         actions = actions.stack()
+        
+        latent_modes = latent_modes.stack()
         
         quality = quality.stack()
         successes = successes.stack()
@@ -170,6 +199,9 @@ class RolloutWorker:
                        distances=tf.expand_dims(distances, axis=0))
         if self.compute_Q:
             episode['quality'] = tf.expand_dims(quality, axis=0)
+            
+        if self.is_expert:
+            episode['latent_modes'] = tf.expand_dims(latent_modes, axis=0)
 
         # success_rate = tf.reduce_mean(tf.cast(successes, tf.float32)) #
         if tf.math.equal(tf.argmax(successes), 0):  # We want to check if goal is achieved or not i.e. binary
@@ -192,6 +224,7 @@ class RolloutWorker:
 
         self.n_episodes += 1
 
+        stats['init_state_dict'] = init_state_dict
         return episode, stats
 
     def clear_history(self):

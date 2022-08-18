@@ -8,8 +8,10 @@ def get_ClassicVAE_args(log_dir):
 
     parser.add_argument('--do_train', type=bool, default=True)
     parser.add_argument('--do_eval', type=bool, default=True)
+    parser.add_argument('--do_verify', type=bool, default=True)
     parser.add_argument('--expert_demos', type=int, default=100, help='Use 100 (GOAL GAIL usage)')
     parser.add_argument('--eval_demos', type=int, default=5, help='Use 5 (trained pol)')
+    parser.add_argument('--test_demos', type=int, default=5, help='Use 5 (trained pol)')
     parser.add_argument('--perc_train', type=int, default=0.9)
 
     # Specify Environment Configuration
@@ -34,25 +36,20 @@ def get_ClassicVAE_args(log_dir):
     parser.add_argument('--num_epochs', type=int, default=500, help='Recommended Use 500')
     parser.add_argument('--n_batches', type=int, default=50,
                         help='Recommended Use round it off nearest multiple of 100 (num_trans/batch_size)')
-    parser.add_argument('--expert_batch_size', type=int, default=128,
+    parser.add_argument('--expert_batch_size', type=int, default=256,
                         help='No. of trans to sample from expert_buffer for Policy Training  (GOAL-GAIL uses 96)')
     
     # Logging Configuration
     parser.add_argument('--patience', type=int, default=10)
-    parser.add_argument('--log_interval', type=int, default=10, help='Recommended Use num_epochs/10')
+    parser.add_argument('--log_interval', type=int, default=50, help='Recommended Use num_epochs/10')
     
-    # overload_eps
+    # Parameters
+    parser.add_argument('--z_dim', type=int, default=1)
     parser.add_argument('--underflow_eps', type=int, default=1e-20, help='Avoid log underflow')
-
-    # Specify Optimiser/Loss Configuration
     parser.add_argument('--vae_lr', type=float, default=0.001)
 
-    # Specify HER Transition/Transitional Data Sampling configuration
-    parser.add_argument('--relabel_for_policy', type=bool, default=True,
-                        help='True for gail_her, False ow')  # TODO: Implement the ow case
-    parser.add_argument('--replay_strategy', type=str, default='future')
-
     # Specify Misc configuration
+    parser.add_argument('--use_norm', type=bool, default=False)
     parser.add_argument('--clip_obs', type=float, default=200.0,
                         help='Un-normalised i.e. raw Observed Values (State and Goals) are clipped to this value')
     parser.add_argument('--clip_norm', type=float, default=5.0,
@@ -61,11 +58,13 @@ def get_ClassicVAE_args(log_dir):
                         help='A small value used in the normalizer to avoid numerical instabilities')
 
     # Specify Path Configurations
-    parser.add_argument('--root_log_dir', type=str, default=log_dir)
-    parser.add_argument('--summary_dir', type=str, default=os.path.join(log_dir, 'summary'))
-    parser.add_argument('--plot_dir', type=str, default=os.path.join(log_dir, 'plots'))
-    parser.add_argument('--param_dir', type=str, default=os.path.join(log_dir, 'models'))
-    parser.add_argument('--test_param_dir', type=str, help='Provide the <path_to_models>')
+    parser.add_argument('--dir_data', type=str, default='./pnp_data')
+    parser.add_argument('--dir_root_log', type=str, default=log_dir)
+    parser.add_argument('--dir_summary', type=str, default=os.path.join(log_dir, 'summary'))
+    parser.add_argument('--dir_plot', type=str, default=os.path.join(log_dir, 'plots'))
+    parser.add_argument('--dir_param', type=str, default=os.path.join(log_dir, 'models'))
+    parser.add_argument('--dir_test', type=str, default=os.path.join('./logging/20220817-153902', 'models_best'),
+                        help='Provide the <path_to_models>')
 
     args = parser.parse_args()
 
