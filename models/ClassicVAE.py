@@ -1,4 +1,5 @@
 import os
+import pickle
 import sys
 import time
 import json
@@ -13,9 +14,9 @@ from utils.buffer import get_buffer_shape
 from domains.PnP import MyPnPEnvWrapperForGoalGAIL, PnPExpert, PnPExpertTwoObj
 from her.rollout import RolloutWorker
 from her.replay_buffer import ReplayBufferTf
-from her.transitions import sample_rnd_consecutive_transitions, sample_all_consecutive_transitions, sample_her_fwd_bkd_transitions
+from her.transitions import sample_no_her_transitions, sample_no_her_all_transitions
 from utils.debug import debug
-from networks.vae import Encoder, Decoder, Policy
+from networks.general import Encoder, Decoder, Policy, Attention
 from utils.vae import kl_divergence_gaussian, kl_divergence_unit_gaussian
 from utils.plot import plot_metric, plot_metrics
 
@@ -29,6 +30,7 @@ class ClassicVAE(tf.keras.Model):
         self.encoder = Encoder(args.z_dim)
         self.decoder = Decoder(args.g_dim)
         self.policy = Policy(args.a_dim, args.action_max)
+        self.attention = Attention(args.alpha_dim)
         self.optimiser = tf.keras.optimizers.Adam(self.args.vae_lr)
 
         self.norm_s = norm_s
@@ -51,12 +53,22 @@ class ClassicVAE(tf.keras.Model):
         # GENERATION: Compute the log-likelihood of actions i.e. p(delta_g|z)
         delta_g = self.decoder(z_g)
     
+        # Predict the attention weights
+        alpha = self.attention(data['states'], data['goals'])
+    
         # Obj: max (ELBO = Log_Likelihood - KL_Divergence)
-        ll = -tf.reduce_sum(tf.math.squared_difference(data['delta_g'], delta_g), axis=-1)
+        targets = [tf.reduce_sum(tf.math.squared_difference(target, delta_g), axis=-1) for target in data['delta_gs']]
+        targets = tf.stack(targets, axis=1)
+        ll = - tf.reduce_sum(tf.math.multiply(alpha, targets), axis=-1) * 1e2
+        # ll = -tf.reduce_sum(tf.math.squared_difference(data['delta_g'], delta_g), axis=-1) * 1e2
         kl = kl_divergence_unit_gaussian(mu=post_locs, log_sigma_sq=tf.math.log(post_scales + self.args.underflow_eps),
                                          mean_batch=False)
         elbo = ll - kl
         loss_g = -elbo
+        
+        # Attention Network
+        # # Induce sparsity in the attention weights using L1 regularisation
+        # loss_a = tf.reduce_sum(tf.abs(alpha), axis=-1)
         
         # ############################################## Policy Network ###############################################
         pred_future_ag = data['achieved_goals'] + delta_g
@@ -76,10 +88,13 @@ class ClassicVAE(tf.keras.Model):
         # GENERATION: Compute the log-likelihood of actions i.e. p(delta_g|z)
         delta_g = self.decoder(z_g)
 
+        # Predict the attention weights
+        alpha = self.attention(data['states'], data['goals'])
+
         pred_future_ag = data['achieved_goals'] + delta_g
         actions_mu = self.policy(data['states'], pred_future_ag)
         loss_p = tf.reduce_sum(tf.math.squared_difference(data['actions'], actions_mu), axis=-1)
-        return tf.reduce_mean(loss_p)
+        return tf.reduce_mean(loss_p), alpha
         
     @tf.function(experimental_relax_shapes=True)
     def train(self, data):
@@ -153,7 +168,7 @@ class Agent(object):
         self.args = args
 
         # Define the Buffers
-        self.transition_fn = sample_her_fwd_bkd_transitions
+        self.transition_fn = sample_no_her_transitions
         self.expert_buffer = expert_buffer
         self.val_buffer = val_buffer
 
@@ -228,24 +243,24 @@ class Agent(object):
         
         transitions_copy = transitions.copy()
         states, achieved_goals, goals = transitions_copy['states'], transitions_copy['achieved_goals'], transitions_copy['goals']
-        inter_goals = transitions_copy['inter_goals']
+        pooled_goals = transitions_copy['pooled_goals']
+        pooled_goals = tf.split(pooled_goals, num_or_size_splits=int(6/3), axis=1)
         
         # Process the states and goals
         states, achieved_goals, goals = self.preprocess_og(states, achieved_goals, goals)
-        _, inter_goals, _ = self.preprocess_og(states, inter_goals, goals)
+        pooled_goals = [tf.clip_by_value(goal, -self.args.clip_obs, self.args.clip_obs) for goal in pooled_goals]
     
         if self.args.use_norm:
             # Normalise before the actor-critic networks are exposed to data
             transitions_copy['states'] = self.norm_s.normalize(states)
             transitions_copy['achieved_goals'] = self.norm_g.normalize(achieved_goals)
-            transitions_copy['inter_goals'] = self.norm_g.normalize(inter_goals)
             transitions_copy['goals'] = self.norm_g.normalize(goals)
+            pooled_goals = [self.norm_g.normalize(goal) for goal in pooled_goals]
         else:
             transitions_copy['states'] = states
             transitions_copy['achieved_goals'] = achieved_goals
-            transitions_copy['inter_goals'] = inter_goals
             transitions_copy['goals'] = goals
-    
+        
         # Define if the transitions are from expert or not/are supervised or not
         transitions_copy['is_demo'] = tf.cast(expert, dtype=tf.int32) * tf.ones_like(transitions_copy['successes'],
                                                                                      dtype=tf.int32)
@@ -253,12 +268,15 @@ class Agent(object):
                                                                                            dtype=tf.int32)
         
         # Compute the difference between current achieved goal and a future goal to achieve
-        transitions_copy['delta_g'] = transitions_copy['inter_goals'] - transitions_copy['achieved_goals']
+        # transitions_copy['delta_g'] = transitions_copy['inter_goals'] - transitions_copy['achieved_goals']
         
         # Make sure the data is of type tf.float32
         for key in transitions_copy.keys():
             transitions_copy[key] = tf.cast(transitions_copy[key], dtype=tf.float32)
     
+        pooled_goals = [tf.cast(goal, dtype=tf.float32) for goal in pooled_goals]
+        transitions_copy['pooled_goals'] = pooled_goals  # Processed and in the split format
+        transitions_copy['delta_gs'] = [target_goal - transitions_copy['achieved_goals'] for target_goal in pooled_goals]
         return transitions_copy
 
     @tf.function
@@ -327,7 +345,7 @@ class Agent(object):
                         for key in val_trans.keys():
                             val_trans[key] = tf.cast(val_trans[key], dtype=tf.float32)
                             
-                    val_policy_loss = self.model.do_eval(val_trans)
+                    val_policy_loss, goal_att_weights = self.model.do_eval(val_trans)
                     
                     # Log Validation Losses
                     with self.summary_writer.as_default():
@@ -335,8 +353,8 @@ class Agent(object):
 
                     if (epoch + 1) % args.log_interval == 0:
     
-                        # Clear the worker's history to avoid retention of poor perf. during early training
-                        self.eval_rollout_worker.clear_history()
+                        # # Clear the worker's history to avoid retention of poor perf. during early training
+                        # self.eval_rollout_worker.clear_history()
                         
                         # Do rollouts using VAE Policy
                         for n in range(args.eval_demos):
@@ -359,8 +377,8 @@ class Agent(object):
                             tf.summary.scalar('stats/Eval/Success_rate', eval_stats['success_rate'], step=epoch)
                         
                     # Monitor Loss for saving the best model
-                    if val_loss.numpy() < monitor_metric:
-                        monitor_metric = val_loss.numpy()
+                    if val_policy_loss.numpy() < monitor_metric:
+                        monitor_metric = val_policy_loss.numpy()
                         logger.info("Saving the best model (best policy_loss: {}) at epoch: {}".format(monitor_metric,
                                                                                                        epoch+1))
                         self.save_model(args.dir_param + '_best')
@@ -378,19 +396,19 @@ def run(args):
         expert_policy = PnPExpert(exp_env, args.full_space_as_goal)
     
     # Initiate a worker to generate expert rollouts
-    expert_worker = RolloutWorker(exp_env, expert_policy, T=args.horizon, rollout_terminate=args.rollout_terminate,
-                                  is_expert=True, exploit=True, noise_eps=0., random_eps=0., compute_Q=False,
-                                  use_target_net=False, render=False)
+    expert_worker = RolloutWorker(
+        exp_env, expert_policy, T=args.horizon, rollout_terminate=args.rollout_terminate,
+        compute_c=True, exploit=True, noise_eps=0., random_eps=0., compute_Q=False,
+        use_target_net=False, render=False)
 
     # ############################################# DATA TRAINING ############################################# #
     # Load Buffer to store expert data
-    expert_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon,
-                                   sample_her_fwd_bkd_transitions)
+    expert_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon, sample_no_her_transitions)
     num_train_episodes = int(args.expert_demos * args.perc_train)
     
-    train_data_path = os.path.join(args.dir_data, '{}_train.pkl'.format('two_obj' if args.two_object else 'single_obj'))
+    train_data_path = os.path.join(args.dir_data, '{}_train.pkl'.format('two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
     env_state_dir = os.path.join(args.dir_data,
-                                 '{}_env_states_train'.format('two_obj' if args.two_object else 'single_obj'))
+                                 '{}_env_states_train'.format('two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
     if not os.path.exists(env_state_dir):
         os.makedirs(env_state_dir)
         
@@ -402,11 +420,12 @@ def run(args):
         for i in range(num_train_episodes):
             # Expert Policy Needs to be reset everytime
             expert_worker.policy.reset()
-            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None,
-                                                                 path_to_init_state_dict=os.path.join(env_state_dir,
-                                                                                                      'env_{}.pkl'.format(
-                                                                                                          i)))
+            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
             expert_buffer.store_episode(_episode)
+            
+            path_to_init_state_dict = tf.constant(os.path.join(env_state_dir, 'env_{}.pkl'.format(i)))
+            with open(path_to_init_state_dict.numpy(), 'wb') as handle:
+                pickle.dump(exp_stats['init_state_dict'], handle, protocol=pickle.HIGHEST_PROTOCOL)
     
         expert_buffer.save_buffer_data(train_data_path)
         logger.info("Saved Expert Demos at {} training.".format(train_data_path))
@@ -421,12 +440,11 @@ def run(args):
 
     # ############################################# DATA VALIDATION ############################################# #
     val_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon,
-                                sample_all_consecutive_transitions)
+                                sample_no_her_all_transitions)
     num_val_episodes = args.expert_demos - num_train_episodes
     
-    val_data_path = os.path.join(args.dir_data, '{}_val.pkl'.format('two_obj' if args.two_object else 'single_obj'))
-    env_state_dir = os.path.join(args.dir_data,
-                                 '{}_env_states_val'.format('two_obj' if args.two_object else 'single_obj'))
+    val_data_path = os.path.join(args.dir_data, '{}_val.pkl'.format('two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
+    env_state_dir = os.path.join(args.dir_data, '{}_env_states_val'.format('two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
     if not os.path.exists(env_state_dir):
         os.makedirs(env_state_dir)
     
@@ -436,11 +454,12 @@ def run(args):
         # Generate and store expert validation data
         for i in range(num_val_episodes):
             expert_worker.policy.reset()
-            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None,
-                                                                 path_to_init_state_dict=os.path.join(env_state_dir,
-                                                                                                      'env_{}.pkl'.format(
-                                                                                                          i)))
+            _episode, exp_stats = expert_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None)
             val_buffer.store_episode(_episode)
+
+            path_to_init_state_dict = tf.constant(os.path.join(env_state_dir, 'env_{}.pkl'.format(i)))
+            with open(path_to_init_state_dict.numpy(), 'wb') as handle:
+                pickle.dump(exp_stats['init_state_dict'], handle, protocol=pickle.HIGHEST_PROTOCOL)
     
         val_buffer.save_buffer_data(val_data_path)
         logger.info("Saved Expert Demos at {} for validation.".format(val_data_path))
@@ -464,21 +483,29 @@ def run(args):
         tf.config.run_functions_eagerly(True)  # To render, must run eagerly
         test_env = get_PnP_env(args)
         agent_test = Agent(args, expert_buffer, val_buffer)
+
+        if not args.dir_test:
+            args.dir_test = os.path.join(args.dir_root_log, 'models_best')
         logger.info("Loading Model Weights from {}".format(args.dir_test))
         agent_test.load_model(dir_param=args.dir_test)
+        
         test_rollout_worker = RolloutWorker(test_env, agent_test.model, T=args.horizon,
                                             rollout_terminate=args.rollout_terminate,
                                             exploit=True, noise_eps=0., random_eps=0.,
-                                            compute_Q=True, use_target_net=False, render=False)
+                                            compute_Q=True, use_target_net=False, render=True)
         
         env_state_dir = os.path.join(args.dir_data,
-                                     '{}_env_states_train'.format('two_obj' if args.two_object else 'single_obj'))
+                                     '{}_env_states_train'.format('two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
         env_state_paths = [os.path.join(env_state_dir, 'env_{}.pkl'.format(n)) for n in range(args.test_demos)]
 
         for n in range(args.test_demos):
+            
+            with open(env_state_paths[n], 'rb') as handle:
+                init_state_dict = pickle.load(handle)
+                init_state_dict['goal'] = init_state_dict['goal'].numpy() if tf.is_tensor(init_state_dict['goal']) else init_state_dict['goal']
+            
             _episode, _ = test_rollout_worker.generate_rollout(slice_goal=(3, 6) if args.full_space_as_goal else None,
-                                                               forced_reset=True,
-                                                               path_to_init_state_dict=env_state_paths[n])
+                                                               init_state_dict=init_state_dict)
     
             # Compute the cosine similarity metric
             indices = tf.stack((tf.zeros(50, dtype=tf.int32), tf.range(50, dtype=tf.int32)), axis=-1)

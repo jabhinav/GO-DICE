@@ -8,8 +8,60 @@ logger = logging.getLogger(__name__)
 
 
 @tf.function(experimental_relax_shapes=True)
+def sample_c_aware_transitions(episodic_data, batch_size_in_transitions=None, do_bkd_transitioning=False):
+    """
+    Sample random transitions without HER.
+    Functionality: Sample time-steps randomly from each episode: (s_t, a_t, G_env) for all episodes.
+    Added functionality: Sample previous latent mode c_{t-1}
+    """
+    debug(fn_name="sample_c_aware_transitions")
+    
+    T = episodic_data['actions'].shape[1]
+    batch_size = batch_size_in_transitions  # Number of transitions to sample
+    
+    # -------------------------------------------------------------------------------------------------------------
+    # ------------------------------------- 1) Select which episodes to use -------------------------------------
+    successes = episodic_data['successes']
+    # Get index at which episode terminated
+    terminate_idxes = tf.math.argmax(successes, axis=-1)
+    # If no success, set to last index
+    mask_no_success = tf.math.equal(terminate_idxes, 0)
+    terminate_idxes += tf.multiply((T - 1) * tf.ones_like(terminate_idxes),
+                                   tf.cast(mask_no_success, terminate_idxes.dtype))
+    # Get episode idx for each transition to sample: more likely to sample from episodes which didn't end in success
+    p = (terminate_idxes + 1) / tf.reduce_sum(terminate_idxes + 1)
+    episode_idxs = tfp.distributions.Categorical(probs=p).sample(sample_shape=(batch_size,))
+    episode_idxs = tf.cast(episode_idxs, dtype=terminate_idxes.dtype)
+    # Get terminate index for the selected episodes
+    terminate_idxes = tf.gather(terminate_idxes, episode_idxs)
+    
+    # -------------------------------------------------------------------------------------------------------------
+    # --------------------------------- 2) Select which time steps + goals to use ---------------------------------
+    # Get the current time step (should be always > 0 and < T)
+    t_samples_frac = tf.experimental.numpy.random.random(size=(batch_size,))
+    t_samples = tf.cast(tf.math.ceil(t_samples_frac * tf.cast(terminate_idxes-1, dtype=t_samples_frac.dtype)),
+                        dtype=terminate_idxes.dtype)
+    
+    # Get the previous time step
+    t_prev = t_samples - 1
+    
+    # -------------------------------------------------------------------------------------------------------------
+    # ----------------- 3) Select the batch of transitions corresponding to the current time steps ----------------
+    curr_indices = tf.stack((episode_idxs, t_samples), axis=-1)
+    curr_transitions = {}
+    for key in episodic_data.keys():
+        curr_transitions[key] = tf.gather_nd(episodic_data[key], indices=curr_indices)
+        
+    # Get the latent mode of the previous time step
+    prev_indices = tf.stack((episode_idxs, t_prev), axis=-1)
+    curr_transitions['prev_latent_modes'] = tf.gather_nd(episodic_data['latent_modes'], indices=prev_indices)
+    
+    return curr_transitions
+
+
+@tf.function(experimental_relax_shapes=True)
 def sample_her_fwd_bkd_transitions(episodic_data, batch_size_in_transitions=None, do_bkd_transitioning=False):
-    debug(fn_name="_sample_her_transitions")
+    debug(fn_name="sample_her_fwd_bkd_transitions")
     
     T = episodic_data['actions'].shape[1]
     batch_size = batch_size_in_transitions  # Number of transitions to sample
@@ -82,7 +134,12 @@ def sample_her_fwd_bkd_transitions(episodic_data, batch_size_in_transitions=None
     return transitions
 
 
-def sample_all_consecutive_transitions(episodic_data, batch_size_in_transitions=None):
+def sample_no_her_all_transitions(episodic_data, batch_size_in_transitions=None):
+    """
+    Sample all transitions without HER.
+    Functionality: Sample time-steps randomly from each episode: (s_t, a_t, G_env) for all episodes.
+    Added functionality: Sample previous latent mode c_{t-1}
+    """
     debug(fn_name="unroll_transitions")
     
     num_episodes = episodic_data['actions'].shape[0]
@@ -97,27 +154,35 @@ def sample_all_consecutive_transitions(episodic_data, batch_size_in_transitions=
                                    tf.cast(mask_no_success, terminate_idxes.dtype))
     
     indices = tf.TensorArray(dtype=terminate_idxes.dtype, size=0, dynamic_size=True)
-    
+    prev_indices = tf.TensorArray(dtype=terminate_idxes.dtype, size=0, dynamic_size=True)
     transition_idx = 0
-    
     # TODO: This is giving ValueError: None values not supported. (while tracing num_episodes=None)
     for ep in tf.range(num_episodes, dtype=terminate_idxes.dtype):
-        for t in tf.range(terminate_idxes[ep], dtype=terminate_idxes.dtype):
-            index = tf.stack((ep, t), axis=-1)
-            indices = indices.write(transition_idx, index)
+        for t in tf.range(1, terminate_idxes[ep], dtype=terminate_idxes.dtype):
+            curr_index = tf.stack((ep, t), axis=-1)
+            indices = indices.write(transition_idx, curr_index)
+            prev_index = tf.stack((ep, t-1), axis=-1)
+            prev_indices = prev_indices.write(transition_idx, prev_index)
             transition_idx += 1
     
     indices = indices.stack()
+    prev_indices = prev_indices.stack()
     transitions = {}
     for key in episodic_data.keys():
         transitions[key] = tf.gather_nd(episodic_data[key], indices=indices)
 
+    transitions['prev_latent_modes'] = tf.gather_nd(episodic_data['latent_modes'], indices=prev_indices)
     return transitions
 
 
 @tf.function(experimental_relax_shapes=True)
-def sample_rnd_consecutive_transitions(episodic_data, batch_size_in_transitions=None):
-    debug(fn_name="_sample_vae_transitions")
+def sample_no_her_transitions(episodic_data, batch_size_in_transitions=None):
+    """
+    Sample transitions without HER.
+    Functionality: Sample time-steps randomly from each episode: (s_t, a_t, G_env)
+    Added functionality: Sample pool of goals. (no c_{t-1})
+    """
+    debug(fn_name="sample_rnd_consecutive_transitions")
 
     T = episodic_data['actions'].shape[1]
     batch_size = batch_size_in_transitions  # Number of transitions to sample
@@ -153,6 +218,15 @@ def sample_rnd_consecutive_transitions(episodic_data, batch_size_in_transitions=
     transitions = {}
     for key in episodic_data.keys():
         transitions[key] = tf.gather_nd(episodic_data[key], indices=indices)
+    
+    # Collect pool of goals from selected episodes
+    t_start = tf.zeros_like(t_samples)
+    # Goal 1: Object position
+    goal1 = tf.gather_nd(episodic_data['achieved_goals'], indices=tf.stack((episode_idxs, t_start), axis=-1))
+    # Goal 2: Environment Goal
+    goal2 = tf.gather_nd(episodic_data['goals'], indices=tf.stack((episode_idxs, t_start), axis=-1))
+    # Concatenate goals
+    transitions['pooled_goals'] = tf.concat((goal1, goal2), axis=1)
         
     # achieved_goal_indices = tf.stack((episode_idxs, future_t), axis=-1)
     # transitions['achieved_goals'] = tf.gather_nd(episodic_data['achieved_goals'], indices=achieved_goal_indices)

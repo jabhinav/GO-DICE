@@ -41,7 +41,7 @@ def get_config_env(args):
     args.a_dim = env.action_space.shape[0]
     args.action_max = float(env.action_space.high[0])
     
-    args.c_dim = 5 if args.two_object else 3  # In a way defines number of skills
+    args.c_dim = env.latent_dim  # In a way defines number of skills
     
     return args
 

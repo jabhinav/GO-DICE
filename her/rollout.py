@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class RolloutWorker:
-    def __init__(self, env: MyPnPEnvWrapperForGoalGAIL, policy, T, rollout_terminate=True, is_expert=False,
+    def __init__(self, env: MyPnPEnvWrapperForGoalGAIL, policy, T, rollout_terminate=True, compute_c=False,
                  exploit=False, noise_eps=0., random_eps=0., compute_Q=False, use_target_net=False, render=False,
                  history_len=100):
         """
@@ -31,7 +31,7 @@ class RolloutWorker:
             history_len (int): length of history for statistics smoothing
         """
         self.env = env
-        self.is_expert = is_expert
+        self.compute_c = compute_c
         self.policy = policy
         self.horizon = T
         self.rollout_terminate = rollout_terminate
@@ -117,6 +117,8 @@ class RolloutWorker:
             
         # Initialise other variables that will be computed
         action, value = tf.zeros(shape=(self.env.action_space.shape[0],)), tf.zeros(shape=(1,))
+        latent_mode = tf.numpy_function(func=self.env.get_init_latent_mode, inp=[], Tout=tf.float32)
+        latent_mode = tf.expand_dims(latent_mode, axis=0)
 
         for t in range(self.horizon):
 
@@ -130,19 +132,26 @@ class RolloutWorker:
             goals = goals.write(t, tf.squeeze(curr_g))
 
             # Run the model and to get action probabilities and critic value
-            op = self.policy.act(curr_state, curr_ag, curr_g, compute_Q=self.compute_Q,
+            op = self.policy.act(curr_state, curr_ag, curr_g, prev_latent_mode=latent_mode,
+                                 compute_Q=self.compute_Q, compute_c=self.compute_c,
                                  noise_eps=self.noise_eps, random_eps=self.random_eps,
                                  use_target_net=self.use_target_net)
-            if self.compute_Q:
+            
+            if self.compute_Q and self.compute_c:
+                action, value, latent_mode = op
+                actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
+                quality = quality.write(t, tf.squeeze(tf.cast(value, dtype=tf.float32)))
+                latent_modes = latent_modes.write(t, tf.squeeze(tf.cast(latent_mode, dtype=tf.float32)))
+            elif self.compute_Q:
                 action, value = op
                 actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
                 quality = quality.write(t, tf.squeeze(tf.cast(value, dtype=tf.float32)))
+            elif self.compute_c:
+                action, latent_mode = op
+                actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
+                latent_modes = latent_modes.write(t, tf.squeeze(tf.cast(latent_mode, dtype=tf.float32)))
             else:
-                if self.is_expert:
-                    action, latent_mode = op
-                    latent_modes = latent_modes.write(t, tf.squeeze(tf.cast(latent_mode, dtype=tf.float32)))
-                else:
-                    action = op
+                action = op
                 actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
 
             # Apply action to the environment to get next state and reward
@@ -200,7 +209,7 @@ class RolloutWorker:
         if self.compute_Q:
             episode['quality'] = tf.expand_dims(quality, axis=0)
             
-        if self.is_expert:
+        if self.compute_c:
             episode['latent_modes'] = tf.expand_dims(latent_modes, axis=0)
 
         # success_rate = tf.reduce_mean(tf.cast(successes, tf.float32)) #

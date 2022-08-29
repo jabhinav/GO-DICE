@@ -269,7 +269,7 @@ class FetchEnv(robot_env.RobotEnv):
         self.sim.data.set_mocap_pos('robot0:mocap', gripper_target)
         self.sim.data.set_mocap_quat('robot0:mocap', gripper_rotation)
         for _ in range(10):
-            self.sim.train()
+            self.sim.step()
 
         # Extract information for sampling goals.
         self.initial_gripper_xpos = self.sim.data.get_site_xpos('robot0:grip').copy()

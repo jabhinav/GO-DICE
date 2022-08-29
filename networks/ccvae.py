@@ -30,13 +30,13 @@ class Encoder(tf.keras.Model):
 
 
 class Decoder(tf.keras.Model):
-	def __init__(self, g_dim):
+	def __init__(self, o_dim):
 		super(Decoder, self).__init__()
 		
 		self.fc1 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
 		self.fc2 = Dense(units=256, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
 		self.fc3 = Dense(units=128, activation=tf.nn.relu, kernel_initializer=tf.keras.initializers.GlorotUniform())
-		self.out = Dense(units=g_dim, activation=tf.nn.tanh, kernel_initializer=tf.keras.initializers.GlorotUniform())
+		self.out = Dense(units=o_dim, activation=tf.nn.tanh, kernel_initializer=tf.keras.initializers.GlorotUniform())
 	
 	def call(self, *ip):
 		x = tf.concat([*ip], axis=1)
@@ -48,12 +48,12 @@ class Decoder(tf.keras.Model):
 	
 
 class Classifier(tf.keras.Model):
-	def __init__(self, c_dim):
+	def __init__(self, y_dim):
 		super(Classifier, self).__init__()
-		self.out_prob_y = Dense(units=c_dim, activation=tf.nn.softmax)
+		self.out_prob_y = Dense(units=y_dim, activation=tf.nn.softmax)
 
-	def call(self, encodes_z):
-		prob_y = self.out_prob_y(encodes_z)
+	def call(self, z):
+		prob_y = self.out_prob_y(z)
 		return prob_y
 
 
@@ -63,11 +63,11 @@ class Conditional_Prior(tf.keras.Model):
 		self.locs_out = Dense(units=z_dim, activation=tf.nn.relu)
 		self.std_out = Dense(units=z_dim, activation=tf.nn.softplus)
 	
-	def call(self, curr_encode_y, k=None):
+	def call(self, y, k=None):
 		if not k:
 			k = 1
-		locs = self.locs_out(curr_encode_y)
-		scale = self.std_out(curr_encode_y)
+		locs = self.locs_out(y)
+		scale = self.std_out(y)
 		scale = tf.clip_by_value(scale, clip_value_min=1e-3, clip_value_max=1e3)
 		prior_z_y = Normal(loc=locs, scale=scale)
 		return locs, scale, prior_z_y.sample(sample_shape=k)

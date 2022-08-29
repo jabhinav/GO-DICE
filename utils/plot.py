@@ -15,7 +15,11 @@ def plot_metric(metric, fig_path, y_label='Loss', x_label='Iterations'):
 
 def plot_metrics(metrics, labels, fig_path, y_label='Loss', x_label='Iterations'):
     num_plots = len(labels)
-    fig, axes = plt.subplots(num_plots)
+    if num_plots > 1:
+        fig, axes = plt.subplots(num_plots)
+    else:
+        fig, ax = plt.subplots()
+        axes = [ax]
     for ax, metric, label in zip(axes, metrics, labels):
         ax.plot(metric, label=label)
         ax.grid(True)
