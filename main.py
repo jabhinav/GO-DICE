@@ -1,118 +1,67 @@
+import json
 import os
 import logging
-import argparse
 import datetime
-from models.GoalGAIL import run
-from utils.env import get_config_env
+import tensorflow as tf
+from collections import OrderedDict
+
+from configs.GoalGAIL import get_GoalGAIL_args
+from configs.Classic import get_ClassicVAE_args
+from configs.gCCVAE import get_gCCVAE_args
+from configs.lCCVAE import get_lCCVAE_args
+
+from models.BC import run as run_BC
+from models.gBC import run as run_gBC
+from models.GoalGAIL import run as run_GoalGAIL
+from models.ClassicVAE import run as run_classicVAE
+from models.gCCVAE import run as run_gCCVAE
+from models.lCCVAE import run as run_lCCVAE
+
+# tf.config.run_functions_eagerly(False)
+tf.config.run_functions_eagerly(True)
 
 current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-logging.basicConfig(filename="./logging/logs_{}".format(current_time), filemode='w',
+log_dir = os.path.join('./logging', current_time)
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+logging.basicConfig(filename=os.path.join(log_dir, 'logs.txt'), filemode='w',
                     format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def get_GoalGAIL_args():
-    parser = argparse.ArgumentParser()
+get_config = {
+    'BC': get_ClassicVAE_args,
+    'gBC': get_ClassicVAE_args,
+    'ClassicVAE': get_ClassicVAE_args,
+    'gCCVAE': get_gCCVAE_args,
+    'lCCVAE': get_lCCVAE_args,
+    'GoalGAIL': get_GoalGAIL_args
+}
 
-    parser.add_argument('--do_train', type=bool, default=True)
-    parser.add_argument('--do_test', type=bool, default=False)
-    parser.add_argument('--test_demos', type=int, default=10, help='Use 10 (trained pol)')
-
-    # Specify Environment Configuration
-    parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
-    parser.add_argument('--full_space_as_goal', type=bool, default=False)
-    parser.add_argument('--two_object', type=bool, default=False)
-    parser.add_argument('--expert_behaviour', type=str, default='2', choices=['0', '1', '2'],
-                        help='Expert behaviour in two_object env')
-    parser.add_argument('--stacking', type=bool, default=False)
-    parser.add_argument('--target_in_the_air', type=bool, default=False,
-                        help='Is only valid in two object task')
-
-    # Specify Data Collection Configuration
-    parser.add_argument('--horizon', type=int, default=50,
-                        help='Set 50 for one_obj, 100 for two_obj:0, two_obj:1 and 150 for two_obj:2')
-    parser.add_argument('--num_demos', type=int, default=100, help='Use 20 (expert pol)')
-    parser.add_argument('--rollout_batch_size', type=int, default=2, help='Use 2 (ddpg pol) per thread')
-    parser.add_argument('--random_eps', type=float, default=0.3, help='% of time a random action is taken (ddpg pol)')
-    parser.add_argument('--noise_eps', type=float, default=0.15, help='std of gauss noise added to non-random actions '
-                                                                      'as a percentage of max_u (ddpg pol)')
-    parser.add_argument('--rollout_terminate', type=bool, default=True,
-                        help='We retain the success flag=1 for states which satisfy goal condition, '
-                             'if set to False success flag will be 0 across traj.')
-    parser.add_argument('--terminate_bootstrapping', type=bool, default=True,
-                        help='Used by DDPG to compute target values. i.e. whether to use (1-done) in '
-                             'y = r + gamma*(1-done)*Q. '
-                             'WE WILL ALWAYS USE (1-done). Thus omitting the use of this control var.')
-    parser.add_argument('--buffer_size', type=int, default=int(1e6), help='--')
-
-    # Specify Training configuration
-    parser.add_argument('--outer_iters', type=int, default=500, help='Use 1000')
-    parser.add_argument('--num_epochs', type=int, default=5, help='Use 5')
-    parser.add_argument('--num_cycles', type=int, default=50, help='Use 50')
-    parser.add_argument('--n_batches', type=int, default=40, help='Use 40')
-    parser.add_argument('--batch_size', type=int, default=256,
-                        help='No. of trans to sample from on_policy_buffer for Policy Training (GOAL-GAIL uses 256)')
-    parser.add_argument('--expert_batch_size', type=int, default=96,
-                        help='No. of trans to sample from expert_buffer for Policy Training  (GOAL-GAIL uses 96)')
-    parser.add_argument('--disc_batch_size', type=int, default=256,
-                        help='Same as ddpg Pol batch_size. These many trans we sample from on_policy_buffer and '
-                             'expert_buffer for Discriminator Training  (GOAL-GAIL uses 256)')
-
-    # Specify Discriminator Configuration
-    parser.add_argument('--n_batches_disc', type=int, default=20, help='Use 0 for bc/her else use 20')
-    parser.add_argument('--train_dis_per_rollout', type=bool, default=True)
-    parser.add_argument('--rew_type', type=str, default='negative', choices=['negative', 'normalized', 'gail', 'airl'])
-    parser.add_argument('--lambd', type=float, default=10.0, help='gradient penalty coefficient for wgan.')
-
-    # Specify Optimiser/Loss Configuration
-    parser.add_argument('--a_lr', type=float, default=1e-4)
-    parser.add_argument('--c_lr', type=float, default=1e-4)
-    parser.add_argument('--d_lr', type=float, default=1e-4)
-    parser.add_argument('--polyak_tau', type=float, default=0.95, help='polyak averaging coefficient for soft-updates')
-    parser.add_argument('--l2_action_penalty', type=float, default=1.,
-                        help='L2 regularize for policy network, GOAL-GAIL uses 0')
-    # parser.add_argument('--anneal_coeff_BC', type=float, default=0., help='Keep it to 0 and do not anneal BC')
-    parser.add_argument('--BC_Loss_coeff', type=float, default=0.01,
-                        help='Weight BC Loss, GOAL-GAIL uses 0, 1/Num_demos')
-    parser.add_argument('--Actor_Loss_coeff', type=float, default=0.001,
-                        help='Weight Actor Loss,  GOAL-GAIL uses 1')
-
-    # Specify HER Transition/Transitional Data Sampling configuration
-    parser.add_argument('--relabel_for_policy', type=bool, default=True,
-                        help='True for gail_her, False ow')  # TODO: Implement the ow case
-    parser.add_argument('--replay_strategy', type=str, default='future')
-    parser.add_argument('--replay_k', type=int, default=4)
-    parser.add_argument('--gail_weight', type=float, default=0.1, help="the weight before gail reward")
-    parser.add_argument('--anneal_disc', type=bool, default=False, help='Whether to anneal disc. reward')
-    parser.add_argument('--two_rs', type=bool, default=False, help='set to True when anneal_disc is set to True')
-    parser.add_argument('--annealing_coeff', type=float, default=1., help='0.9 if her_bc else 1.')
-    parser.add_argument('--q_annealing', type=float, default=1.)
-
-    # Specify Misc configuration
-    parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--relative_goals', type=bool, default=False)
-    parser.add_argument('--clip_obs', type=float, default=200.0,
-                        help='Un-normalised i.e. raw Observed Values (State and Goals) are clipped to this value')
-    parser.add_argument('--clip_norm', type=float, default=5.0,
-                        help='Normalised Observed Values (State and Goals) are clipped to this value')
-    parser.add_argument('--eps_norm', type=float, default=0.01,
-                        help='A small value used in the normalizer to avoid numerical instabilities')
-
-    # Specify Path Configurations
-    parser.add_argument('--summary_dir', type=str, default='./logging/summary')
-    parser.add_argument('--param_dir', type=str, default='./logging/models')
-
-    args = parser.parse_args()
-
-    # Load the environment config
-    args = get_config_env(args)
-
-    return args
+run_model = {
+    'BC': run_BC,
+    'gBC': run_gBC,
+    'ClassicVAE': run_classicVAE,
+    'gCCVAE': run_gCCVAE,
+    'lCCVAE': run_lCCVAE,
+    'GoalGAIL': run_GoalGAIL
+}
 
 
 if __name__ == "__main__":
-    args = get_GoalGAIL_args()
+    model = 'gBC'
+    logger.info("################## Working on Model: \"{}\" ##################".format(model))
+
     # store_data_at = os.path.join(os.getcwd(), 'pnp_data/two_obj_fickle_start.pkl')
-    run(args, store_data_path=None)
+    args = get_config[model](log_dir)
+
+    logger.info("---------------------------------------------------------------------------------------------")
+    config: dict = vars(args)
+    config = {key: str(value) for key, value in config.items()}
+    config = OrderedDict(sorted(config.items()))
+    logger.info(json.dumps(config, indent=4))
+    
+    run_model[model](args)

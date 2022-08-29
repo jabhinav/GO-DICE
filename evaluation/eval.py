@@ -192,7 +192,7 @@ def evaluate_model_continuous(agent, model_class, test_traj_sac, train_config, f
 
             prev_encode_y = init_encode_y
             while step < env_max_steps + 1:
-                next_obs, reward, done, info = env.step(action.numpy()[0])
+                next_obs, reward, done, info = env.train(action.numpy()[0])
                 env.render()
                 step += 1
 
@@ -302,7 +302,7 @@ def evaluate_sup_model_continuous(agent, model_class, test_traj_sac, train_confi
                 dist = Normal(loc=action_mu, scale=action_scale)
                 action = dist.sample()
 
-                next_obs, reward, done, info = env.step(action.numpy()[0])
+                next_obs, reward, done, info = env.train(action.numpy()[0])
                 env.render()
                 step += 1
 

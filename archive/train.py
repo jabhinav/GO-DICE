@@ -7,11 +7,11 @@ from models import Agent
 from domains.teamboxworld import TeamBoxWorld
 from domains.boxworld import BoxWorld
 from domains.roadworld import RoadWorld
-from config import InfoGAIL_config as model_config
-from config import state_action_path, latent_path, env_name, seed_values, InfoGAIL_pretrained_model_dir
-from config import env_roadWorld_config, env_boxWorld_config, training_data_config, env_teamBoxWorld_config
+from configs.AAMAS_config import InfoGAIL_config as model_config
+from configs.AAMAS_config import state_action_path, latent_path, env_name, seed_values, InfoGAIL_pretrained_model_dir
+from configs.AAMAS_config import env_roadWorld_config, env_boxWorld_config, training_data_config, env_teamBoxWorld_config
 from utils.misc import parse_data
-from config import param_dir as p_dir
+from configs.AAMAS_config import param_dir as p_dir
 
 
 def run(exp_num, env, env_config, param_dir, finetune=0):

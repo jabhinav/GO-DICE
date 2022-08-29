@@ -3,7 +3,7 @@ import sys
 from domains.teamboxworld import TeamBoxWorld
 from domains.boxworld import BoxWorld
 from domains.roadworld import RoadWorld
-from config import env_roadWorld_config, env_boxWorld_config, env_teamBoxWorld_config, env_pickBoxWorld_config
+from configs.AAMAS_config import env_roadWorld_config, env_boxWorld_config, env_teamBoxWorld_config
 
 env_name = 'BoxWorld'
 latent_setting = 'dynamic'

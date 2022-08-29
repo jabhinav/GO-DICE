@@ -2,6 +2,7 @@ import time
 import numpy as np
 from typing import Tuple
 import collections
+import pickle
 import tensorflow as tf
 
 ACTION_TO_LATENT_MAPPING = {
@@ -16,7 +17,7 @@ ACTION_TO_LATENT_MAPPING = {
 def Step(observation, reward, done, **kwargs):
     """
     Convenience method creating a namedtuple with the results of the
-    environment.step method.
+    environment's step method.
     Put extra diagnostic info in the kwargs
     """
     _Step = collections.namedtuple("Step", ["observation", "reward", "done", "info"])
@@ -69,6 +70,11 @@ class PnPEnv(object):
         self.fix_goal = fix_goal
         if fix_goal:
             self.fixed_goal = np.array([1.48673746, 0.69548325, 0.6])
+            
+        if two_obj:
+            self.latent_dim = 5
+        else:
+            self.latent_dim = 3
 
     @property
     def observation_space(self):
@@ -87,11 +93,22 @@ class PnPEnv(object):
         # Update the goal based on some checks
         self.update_goal(d=d)
         return self._transform_obs(d['observation'])
+    
+    def forced_reset(self, state_dict):
+        d = self._env.forced_reset(state_dict)
+        # Update the goal based on some checks
+        self.update_goal(d=d)
+        return self._transform_obs(d['observation'])
+    
+    def get_state_dict(self):
+        state_dict = self._env.get_state_dict()
+        # tf.print("PnPEnv: {}".format(state_dict['goal']))
+        return state_dict
 
     def step(self, action):
         next_obs, reward, _, info = self._env.step(
             action)  # FetchPickAndPlaceEnv freezes done to False and stores termination response in info
-        next_obs = self._transform_obs(next_obs['observation'])
+        next_obs = self._transform_obs(next_obs['observation'])  # Remove unwanted portions of the observed state
         info['obs2goal'] = self.transform_to_goal_space(next_obs)
         info['distance'] = np.linalg.norm(self.current_goal - info['obs2goal'])
         if self.full_space_as_goal:
@@ -154,15 +171,24 @@ class PnPEnv(object):
         if self.fix_goal:
             self._current_goal = self.fixed_goal
         else:
+            
             if d is not None:
                 self._current_goal = d['desired_goal']
             else:
                 self._current_goal = self._env.goal = np.copy(self._env._sample_goal())
+            
             if self.full_space_as_goal:
                 self._current_goal = np.concatenate([self.sample_hand_pos(self._current_goal), self._current_goal])
 
     def set_feasible_hand(self, bool):
         self.feasible_hand = bool
+        
+    def get_init_latent_mode(self):
+        # TODO: Change this for two-object case
+        init_latent_mode = ACTION_TO_LATENT_MAPPING['pick:obj0']
+        init_latent_mode = tf.one_hot(init_latent_mode, depth=self.latent_dim, dtype=tf.float32)
+        init_latent_mode = tf.squeeze(init_latent_mode)
+        return init_latent_mode
 
 
 class MyPnPEnvWrapperForGoalGAIL(PnPEnv):
@@ -183,25 +209,46 @@ class MyPnPEnvWrapperForGoalGAIL(PnPEnv):
         desired_goal = super(MyPnPEnvWrapperForGoalGAIL, self).current_goal
         return obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32)
 
-    def step(self, action, render=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def step(self, action, render=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         if len(action.shape) > 1:
             action = action[0]
         obs, _, done, info = super(MyPnPEnvWrapperForGoalGAIL, self).step(action)  # ignore reward (re-computed in HER)
 
         if render:
             super(MyPnPEnvWrapperForGoalGAIL, self).render()
+        
         achieved_goal = super(MyPnPEnvWrapperForGoalGAIL, self).transform_to_goal_space(obs)
         desired_goal = super(MyPnPEnvWrapperForGoalGAIL, self).current_goal
         success = int(done)
-        return obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32), \
-               np.array(success, np.int32)
+        
+        return obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32), np.array(success, np.int32), info['distance'].astype(np.float32)
 
+    def forced_reset(self, state_dict, render=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        obs = super(MyPnPEnvWrapperForGoalGAIL, self).forced_reset(state_dict)
+        if render:
+            super(MyPnPEnvWrapperForGoalGAIL, self).render()
+        achieved_goal = super(MyPnPEnvWrapperForGoalGAIL, self).transform_to_goal_space(obs)
+        desired_goal = super(MyPnPEnvWrapperForGoalGAIL, self).current_goal
+        return obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32)
+    
+    def get_state_dict(self):
+        state_dict = super(MyPnPEnvWrapperForGoalGAIL, self).get_state_dict()
+        # tf.print("MyPnPEnvWrapperForGoalGAIL: {}".format(state_dict['goal']))
+        return state_dict
+        
     def reward_fn(self, ag_2, g, o, relative_goal=False, distance_metric='L1', only_feasible=False,
                   extend_dist_rew_weight=0.):
+        """
+            Custom reward function with two components:
+                (a) 0/1 for whether goal is reached (weighed by self.goal_weight),
+                (b) relative distance between achieved goal and desired goal (weighed by extend_dist_rew_weight)
+        """
+        
         if relative_goal:
             dif = o[:, -2:]
         else:
             dif = ag_2 - g
+        
         if distance_metric == 'L1':
             goal_distance = np.linalg.norm(dif, ord=1, axis=-1)
         elif distance_metric == 'L2':
@@ -211,13 +258,12 @@ class MyPnPEnvWrapperForGoalGAIL(PnPEnv):
         else:
             raise NotImplementedError('Unsupported distance metric type.')
 
-        if only_feasible:
-            ret = np.logical_and(goal_distance < self.terminal_eps, [self.is_feasible(g_ind) for g_ind in
-                                                                     g]) * self.goal_weight - \
-                  extend_dist_rew_weight * goal_distance
-        else:
-            ret = (goal_distance < self.terminal_eps) * self.goal_weight - \
-                  extend_dist_rew_weight * goal_distance
+        # if only_feasible:
+        #     ret = np.logical_and(goal_distance < self.terminal_eps, [self.is_feasible(g_ind) for g_ind in
+        #                                                              g]) * self.goal_weight - \
+        #           extend_dist_rew_weight * goal_distance
+        # else:
+        ret = (goal_distance < self.terminal_eps) * self.goal_weight - extend_dist_rew_weight * goal_distance
 
         return ret
 
@@ -226,18 +272,25 @@ class PnPExpert:
     def __init__(self, env, full_space_as_goal=False, noise_eps=0.0, random_eps=0.0):
         self.env = env
         self.step_size = 6
+        self.latent_dim =  env.latent_dim
         self.full_space_as_goal = full_space_as_goal
 
         self.reset()
 
-    def act(self, state, achieved_goal, goal, noise_eps=0., random_eps=0., **kwargs):  # only support one observation
+    def act(self, state, achieved_goal, goal, noise_eps=0., random_eps=0., compute_c=True, **kwargs):
         # a, latent_mode = self.get_action(state[0])
         # a = self.add_noise_to_action(a, noise_eps, random_eps)
 
-        a, latent_mode = tf.numpy_function(func=self.get_action, inp=[state[0]], Tout=[tf.float32, tf.float32])
+        a, latent_mode = tf.numpy_function(func=self.get_action, inp=[state[0]], Tout=[tf.float32, tf.int32])
         a = tf.numpy_function(func=self.add_noise_to_action, inp=[a, noise_eps, random_eps], Tout=tf.float32)
         a = tf.squeeze(a)
-        return a
+        
+        latent_mode = tf.one_hot(latent_mode, depth=self.latent_dim, dtype=tf.float32)
+        latent_mode = tf.squeeze(latent_mode)
+        if compute_c:
+            return a, latent_mode
+        else:
+            return a
 
     def get_action(self, o):
         gripper_pos = o[:3]
@@ -259,7 +312,7 @@ class PnPExpert:
             self.block0_picked = True
             ac, ac_type = self.goto_goal(block_pos, goal_pos)
 
-        return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.float32)
+        return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.int32)
 
     def reset(self):
         #  # Hack: This flag helps bypass the irregular behaviour i.e. when block is picked and
@@ -319,6 +372,7 @@ class PnPExpertTwoObj:
         self.env = env
         self.step_size = 6
         self.full_space_as_goal = full_space_as_goal
+        self.latent_dim = env.latent_dim
 
         # Thresholds
         self.sub_goal_height = 0.55  # Height to which block will be first taken before moving towards goal.
@@ -330,13 +384,18 @@ class PnPExpertTwoObj:
         self.expert_behaviour: str = expert_behaviour  # One of ['0', '1', '2']
         self.reset()
 
-    def act(self, state, achieved_goal, goal, noise_eps=0., random_eps=0.,
-            **kwargs):  # only supports one observation
+    def act(self, state, achieved_goal, goal, noise_eps=0., random_eps=0., compute_c=True, **kwargs):
 
-        a, latent_mode = tf.numpy_function(func=self.get_action, inp=[state[0]], Tout=[tf.float32, tf.float32])
+        a, latent_mode = tf.numpy_function(func=self.get_action, inp=[state[0]], Tout=[tf.float32, tf.int32])
         a = tf.numpy_function(func=self.add_noise_to_action, inp=[a, noise_eps, random_eps], Tout=tf.float32)
         a = tf.squeeze(a)
-        return a
+        
+        latent_mode = tf.one_hot(latent_mode, depth=self.latent_dim, dtype=tf.float32)
+        latent_mode = tf.squeeze(latent_mode)
+        if compute_c:
+            return a, latent_mode
+        else:
+            return a
 
     def get_action(self, o) -> Tuple[np.ndarray, np.ndarray]:
         time.sleep(0.01)
@@ -378,14 +437,14 @@ class PnPExpertTwoObj:
                     # Action = RELEASE
                     ac = np.array([gripper_pos[0], gripper_pos[1], 1., 1.], dtype=np.float32)
                     ac_type = 'pick:obj1'
-                    return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.float32)
+                    return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.int32)
 
                 elif np.linalg.norm(relative_block_pos1) < 0.01:
                     # print("Release Block 1")
                     # Action = RELEASE
                     ac = np.array([gripper_pos[0], gripper_pos[1], 1., 1.], dtype=np.float32)
                     ac_type = 'pick:obj0'
-                    return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.float32)
+                    return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.int32)
 
         def deal_with_block(block_pos, relative_block_pos, current_goal_block, block_picked, tempGoal_reached):
             if np.linalg.norm(relative_block_pos) > 0.1 \
@@ -495,7 +554,7 @@ class PnPExpertTwoObj:
                                                                                           self.tempGoal1_reached)
                 ac_type = ac_type + '1' if ac_type != 'stay' else ac_type
 
-        return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.float32)
+        return ac, np.array([ACTION_TO_LATENT_MAPPING[ac_type]], dtype=np.int32)
 
     def reset(self):
         self.block0_picked, self.block1_picked = False, False

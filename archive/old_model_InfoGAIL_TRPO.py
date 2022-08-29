@@ -2,8 +2,7 @@ import time
 # from config import fig_path
 from tqdm import tqdm
 from archive.old_trpo import *
-from config import dtype, fig_path
-from utils.plot import *
+from configs.AAMAS_config import dtype, fig_path
 from keras import backend as K
 from keras.layers import Dense, LeakyReLU, Input, Lambda, Add, Concatenate
 from keras import Model, models
