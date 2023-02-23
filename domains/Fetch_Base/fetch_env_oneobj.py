@@ -30,6 +30,8 @@ class FetchEnv(robot_env.RobotEnv):
         distance_threshold,
         initial_qpos,
         reward_type,
+        fix_object,
+        fix_goal
     ):
         """Initializes a new Fetch environment.
 
@@ -46,6 +48,8 @@ class FetchEnv(robot_env.RobotEnv):
             distance_threshold (float): the threshold after which a goal is considered achieved
             initial_qpos (dict): a dictionary of joint names and values that define the initial configuration
             reward_type ('sparse' or 'dense'): the reward type, i.e. sparse or dense
+            fix_object (boolean): whether the object is fixed or not
+            fix_goal (boolean): whether the goal is fixed or not
         """
         self.gripper_extra_height = gripper_extra_height
         self.block_gripper = block_gripper
@@ -56,6 +60,14 @@ class FetchEnv(robot_env.RobotEnv):
         self.target_range = target_range
         self.distance_threshold = distance_threshold
         self.reward_type = reward_type
+        
+        self.fix_object = fix_object
+        if fix_object:
+            self.fixed_object = np.array([1.4, 0.6])
+
+        self.fix_goal = fix_goal
+        if fix_goal:
+            self.fixed_goal = np.array([1.48673746, 0.69548325, 0.6])
 
         super(FetchEnv, self).__init__(
             model_path=model_path,
@@ -178,11 +190,12 @@ class FetchEnv(robot_env.RobotEnv):
 
         # Randomize start position of object (by adding offsets to the gripper pos).
         if self.has_object:
-            object_xpos = self.initial_gripper_xpos[:2]
-            while np.linalg.norm(object_xpos - self.initial_gripper_xpos[:2]) < 0.1:
-                object_xpos = self.initial_gripper_xpos[:2] + self.np_random.uniform(
-                    -self.obj_range, self.obj_range, size=2
-                )
+            if not self.fix_object:
+                object_xpos = self.initial_gripper_xpos[:2]
+                while np.linalg.norm(object_xpos - self.initial_gripper_xpos[:2]) < 0.1:
+                    object_xpos = self.initial_gripper_xpos[:2] + self.np_random.uniform(-self.obj_range, self.obj_range, size=2)
+            else:
+                object_xpos = self.fixed_object
             object_qpos = self.sim.data.get_joint_qpos("object0:joint")
             assert object_qpos.shape == (7,)
             object_qpos[:2] = object_xpos
@@ -212,18 +225,21 @@ class FetchEnv(robot_env.RobotEnv):
         }
 
     def _sample_goal(self):
-        if self.has_object:
-            goal = self.initial_gripper_xpos[:3] + self.np_random.uniform(
-                -self.target_range, self.target_range, size=3
-            )
-            goal += self.target_offset
-            goal[2] = self.height_offset
-            if self.target_in_the_air and self.np_random.uniform() < 0.5:
-                goal[2] += self.np_random.uniform(0, 0.45)
+        if not self.fix_goal:
+            if self.has_object:
+                goal = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+                    -self.target_range, self.target_range, size=3
+                )
+                goal += self.target_offset
+                goal[2] = self.height_offset
+                if self.target_in_the_air and self.np_random.uniform() < 0.5:
+                    goal[2] += self.np_random.uniform(0, 0.45)
+            else:
+                goal = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+                    -self.target_range, self.target_range, size=3
+                )
         else:
-            goal = self.initial_gripper_xpos[:3] + self.np_random.uniform(
-                -self.target_range, self.target_range, size=3
-            )
+            goal = self.fixed_goal
         return goal.copy()
 
     def _is_success(self, achieved_goal, desired_goal):
@@ -256,7 +272,7 @@ class FetchEnv(robot_env.RobotEnv):
 
 
 class FetchPickAndPlaceEnv(FetchEnv, gym_utils.EzPickle):
-    def __init__(self, reward_type='sparse'):
+    def __init__(self, reward_type='sparse', distance_threshold=0.05, fix_object=False, fix_goal=False):
         initial_qpos = {
             'robot0:slide0': 0.405,
             'robot0:slide1': 0.48,
@@ -266,6 +282,8 @@ class FetchPickAndPlaceEnv(FetchEnv, gym_utils.EzPickle):
         FetchEnv.__init__(
             self, MODEL_XML_PATH, has_object=True, block_gripper=False, n_substeps=20,
             gripper_extra_height=0.2, target_in_the_air=True, target_offset=0.0,
-            obj_range=0.15, target_range=0.15, distance_threshold=0.05,
-            initial_qpos=initial_qpos, reward_type=reward_type)
+            obj_range=0.15, target_range=0.15, distance_threshold=distance_threshold,
+            initial_qpos=initial_qpos, reward_type=reward_type,
+            fix_object=fix_object, fix_goal=fix_goal
+        )
         gym_utils.EzPickle.__init__(self)
