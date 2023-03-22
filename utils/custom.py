@@ -6,7 +6,7 @@ from her.rollout import RolloutWorker
 def state_to_goal(num_objs: int):
 	"""
 	Converts state to goal. (Achieved Goal Space)
-	If obj_identifiers is not None, then it further filters the achieved goals based on the object id.
+	If obj_identifiers is not None, then it further filters the achieved goals based on the object/skill id.
 	"""
 	
 	@tf.function(experimental_relax_shapes=True)  # Imp otherwise code will be very slow
@@ -25,7 +25,7 @@ def state_to_goal(num_objs: int):
 	return get_goal
 	
 
-def evaluate(actor, env, num_episodes=10):
+def evaluate(actor, env, num_episodes=100):
 	"""Evaluates the policy.
 	
 	Args:

@@ -9,10 +9,11 @@ def get_DICE_args(log_dir):
 	parser.add_argument('--do_train', type=bool, default=True,
 						help='Whether to train the Goal/Skill Predictor [Assumes pretraining is done]')
 	parser.add_argument('--do_eval', type=bool, default=True)
-	parser.add_argument('--expert_demos', type=int, default=10, help='Use 100 (GOAL GAIL usage)')
+	parser.add_argument('--expert_demos', type=int, default=25, help='Use 100 (GOAL GAIL usage)')
+	parser.add_argument('--imperfect_demos', type=int, default=100, help='Use 100 (GOAL GAIL usage)')
 	parser.add_argument('--eval_demos', type=int, default=10, help='Use 5 (unseen demos to validate trained pol)')
 	parser.add_argument('--test_demos', type=int, default=5, help='Use 5 (seen demos to verify trained pol)')
-	parser.add_argument('--perc_train', type=int, default=0.9)
+	parser.add_argument('--perc_train', type=int, default=1.0)
 	
 	# # Specify Skill Configuration
 	# parser.add_argument('--num_skills', type=int, default=3)
@@ -29,7 +30,7 @@ def get_DICE_args(log_dir):
 	parser.add_argument('--stacking', type=bool, default=False)
 	parser.add_argument('--target_in_the_air', type=bool, default=False,
 						help='Is only valid in two object task')
-	parser.add_argument('--fix_goal', type=bool, default=True,
+	parser.add_argument('--fix_goal', type=bool, default=False,
 						help='Fix the goal position for one object task')
 	parser.add_argument('--fix_object', type=bool, default=False,
 						help='Fix the object position for one object task')
@@ -44,11 +45,11 @@ def get_DICE_args(log_dir):
 						help='Number of transitions to store in buffer (max_time_steps)')
 	
 	# Specify Training configuration
-	parser.add_argument('--max_time_steps', type=int, default=2e5,
+	parser.add_argument('--max_time_steps', type=int, default=5e5,
 						help='Number of time steps to run')
 	parser.add_argument('--start_training_timesteps', type=int, default=0,
 						help='Number of time steps before starting training')
-	parser.add_argument('--updates_per_step', type=int, default=2,
+	parser.add_argument('--updates_per_step', type=int, default=1,
 						help='Number of updates per time step')
 	parser.add_argument('--num_random_actions', type=int, default=1e4,
 						help='Number of steps to do exploration and then exploit - 2e3')
@@ -56,7 +57,7 @@ def get_DICE_args(log_dir):
 						help='No. of trans to sample from expert_buffer for Policy Training')
 	
 	# Logging Configuration
-	parser.add_argument('--eval_interval', type=int, default=100, help='Recommended Use num_epochs/10')
+	parser.add_argument('--eval_interval', type=int, default=50)
 	
 	# Parameters
 	parser.add_argument('--discount', type=float, default=0.99, help='Discount used for returns.')

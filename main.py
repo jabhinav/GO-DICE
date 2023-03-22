@@ -15,8 +15,6 @@ from models.BC import run as run_BC
 
 from verify import run_gpred as run_verify
 
-from modelsG.gdemoDICE import run as run_gdemoDICE
-
 tf.config.run_functions_eagerly(False)
 # tf.config.run_functions_eagerly(True)
 
@@ -36,7 +34,7 @@ get_config = {
 	'goalOptionBC': get_goalGuidedOptionBC_args,
 	'ValueDICE': get_DICE_args,
 	'DemoDICE': get_DICE_args,
-	'gDemoDICE': get_DICE_args,
+	# 'gDemoDICE': get_DICE_args,
 }
 
 run_model = {
@@ -44,7 +42,7 @@ run_model = {
 	'goalOptionBC': run_goalOptionBC,
 	'ValueDICE': run_valueDICE,
 	'DemoDICE': run_demoDICE,
-	'gDemoDICE': run_gdemoDICE,
+	# 'gDemoDICE': run_gdemoDICE,
 }
 
 
@@ -58,7 +56,7 @@ def verify(_args):
 
 
 if __name__ == "__main__":
-	model = 'gDemoDICE'
+	model = 'DemoDICE'
 	logger.info("# ################# Working on Model: \"{}\" ################# #".format(model))
 	
 	# store_data_at = os.path.join(os.getcwd(), 'pnp_data/two_obj_fickle_start.pkl')

@@ -372,10 +372,9 @@ class PnPExpertTwoObj:
 			a = _drop()
 		return a
 	
-	def sample_curr_goal(self, state, env_goal, prev_goal, for_expert=True):
+	def sample_curr_goal(self, state, prev_goal, for_expert=True):
 		"""
 		:param state: current state of the environment
-		:param env_goal: goal position of the environment
 		(env_goal is used to construct the goal pool, so it is used to sample goals)
 		:param prev_goal: previous goal achieved
 		:param for_expert: if True, sample goals for expert, else sample goals for agent
@@ -426,7 +425,7 @@ class PnPExpertTwoObj:
 			
 		return curr_goal
 	
-	def sample_curr_skill(self, prev_goal, prev_skill, state, env_goal, curr_goal):
+	def sample_curr_skill(self, prev_goal, prev_skill, state, curr_goal):
 		# Do argmax on prev_skill and obtain the string name of the skill
 		prev_skill = self.skill_idx_to_name(prev_skill)
 		
@@ -473,7 +472,7 @@ class PnPExpertTwoObj:
 		
 		return self.skill_name_to_idx(curr_skill)
 	
-	def sample_action(self, state, env_goal, curr_goal, curr_skill):
+	def sample_action(self, state, curr_goal, curr_skill):
 		# Execute the current skill
 		curr_skill_name = self.skill_idx_to_name(curr_skill)
 		if curr_skill_name == "pick":
@@ -491,13 +490,13 @@ class PnPExpertTwoObj:
 		state, env_goal, prev_goal, prev_skill = state.numpy(), env_goal.numpy(), prev_goal.numpy(), prev_skill.numpy()
 		
 		# Determine the current goal to achieve
-		curr_goal = self.sample_curr_goal(state, env_goal, prev_goal)
+		curr_goal = self.sample_curr_goal(state, prev_goal)
 		
 		# Determine the current skill to execute
-		curr_skill = self.sample_curr_skill(prev_goal, prev_skill, state, env_goal, curr_goal)
+		curr_skill = self.sample_curr_skill(prev_goal, prev_skill, state, curr_goal)
 		
 		# Execute the current skill
-		curr_action = self.sample_action(state, env_goal, curr_goal, curr_skill)
+		curr_action = self.sample_action(state, curr_goal, curr_skill)
 
 		# Convert np arrays to tensorflow tensor with shape (1,-1)
 		curr_goal = tf.convert_to_tensor(curr_goal.reshape(1, -1), dtype=tf.float32)

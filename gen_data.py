@@ -153,7 +153,7 @@ def run(args):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--expert_demos', type=int, default=25, help='Use 100 (GOAL GAIL usage)')
+	parser.add_argument('--expert_demos', type=int, default=100, help='Use 100 (GOAL GAIL usage)')
 	parser.add_argument('--perc_train', type=int, default=1.0,
 						help='Percentage of expert demos to use for training. Use 0.9')
 	
@@ -166,7 +166,7 @@ if __name__ == '__main__':
 	parser.add_argument('--stacking', type=bool, default=False)
 	parser.add_argument('--target_in_the_air', type=bool, default=False,
 						help='Is only valid in two object task')
-	parser.add_argument('--fix_goal', type=bool, default=True,
+	parser.add_argument('--fix_goal', type=bool, default=False,
 						help='Fix the goal position for one object task')
 	parser.add_argument('--fix_object', type=bool, default=False,
 						help='Fix the object position for one object task')

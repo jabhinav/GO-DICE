@@ -14,7 +14,7 @@ from tqdm import tqdm
 from domains.PnP import MyPnPEnvWrapper
 from domains.PnPExpert import PnPExpert, PnPExpertTwoObj
 from her.replay_buffer import ReplayBufferTf
-from her.transitions import sample_non_her_transitions
+from her.transitions import sample_transitions
 from networks.general import Actor, GoalPredictor, SkillPredictor, SkillTerminationPredictor
 from utils.buffer import get_buffer_shape
 from utils.env import get_PnP_env
@@ -531,16 +531,16 @@ def run(args):
 	# ######################################################################################################## #
 	# Load Buffer to store expert data
 	expert_buffer_seg = ReplayBufferTf(
-		get_buffer_shape(args), args.buffer_size, args.horizon, sample_non_her_transitions('random_segmented')
+		get_buffer_shape(args), args.buffer_size, args.horizon, sample_transitions('random_segmented')
 	)
 	expert_buffer_unseg = ReplayBufferTf(
-		get_buffer_shape(args), args.buffer_size, args.horizon, sample_non_her_transitions('random_unsegmented')
+		get_buffer_shape(args), args.buffer_size, args.horizon, sample_transitions('random_unsegmented')
 	)
 	val_buffer_seg = ReplayBufferTf(
-		get_buffer_shape(args), args.buffer_size, args.horizon, sample_non_her_transitions('all_segmented')
+		get_buffer_shape(args), args.buffer_size, args.horizon, sample_transitions('all_segmented')
 	)
 	val_buffer_unseg = ReplayBufferTf(
-		get_buffer_shape(args), args.buffer_size, args.horizon, sample_non_her_transitions('all_unsegmented')
+		get_buffer_shape(args), args.buffer_size, args.horizon, sample_transitions('all_unsegmented')
 	)
 	
 	train_data_path = os.path.join(args.dir_data, '{}_train.pkl'.format(

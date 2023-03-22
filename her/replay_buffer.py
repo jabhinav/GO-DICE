@@ -129,7 +129,7 @@ class ReplayBufferTf:
 		with open(path, 'wb') as handle:
 			pickle.dump(buffered_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 	
-	def load_data_into_buffer(self, path_to_data, clear_buffer=True):
+	def load_data_into_buffer(self, path_to_data, clear_buffer=True, num_demos_to_load=None):
 		
 		import pickle
 		with open(path_to_data, 'rb') as handle:
@@ -137,6 +137,10 @@ class ReplayBufferTf:
 		
 		if clear_buffer:
 			self.clear_buffer()
+			
+		if num_demos_to_load is not None:
+			for key in buffered_data.keys():
+				buffered_data[key] = buffered_data[key][:num_demos_to_load]
 		
 		# Check if all tensors are present in loaded data
 		data_sizes = [len(buffered_data[key]) for key in self.buffer_keys]

@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from domains.PnP import MyPnPEnvWrapper
 from her.replay_buffer import ReplayBufferTf
-from her.transitions import sample_her_transitions
+from her.transitions import sample_transitions
 from her.rollout import RolloutWorker
 from networks.general import Actor, Critic, Discriminator
 from utils.buffer import get_buffer_shape
@@ -26,16 +26,21 @@ from tensorflow_gan.python.losses import losses_impl as tfgan_losses
 logger = logging.getLogger(__name__)
 
 
-def _update_pbar_msg(args, pbar, total_timesteps):
+def _update_pbar_msg(args, pbar, total_timesteps, offline=True):
 	"""Update the progress bar with the current training phase."""
-	if total_timesteps < args.start_training_timesteps:
-		msg = 'Not Training'
+	
+	if offline:
+		msg = "offline"
 	else:
-		msg = 'Training'
-	if total_timesteps < args.num_random_actions:
-		msg += ' - Exploration'
-	else:
-		msg += ' - Exploitation'
+		if total_timesteps < args.start_training_timesteps:
+			msg = 'Not Training'
+		else:
+			msg = 'Training'
+		if total_timesteps < args.num_random_actions:
+			msg += ' - Exploration'
+		else:
+			msg += ' - Exploitation'
+	
 	if pbar.desc != msg:
 		pbar.set_description(msg)
 
@@ -63,7 +68,7 @@ class gDemoDICE(tf.keras.Model, ABC):
 		exp_env = get_PnP_env(args)
 		num_skills = exp_env.latent_dim
 		
-		self.use_expert_goal = True
+		self.use_expert_goal = False
 		if args.two_object:
 			self.expert_guide = PnPExpertTwoObj(num_skills, expert_behaviour=args.expert_behaviour)
 		else:
@@ -78,11 +83,16 @@ class gDemoDICE(tf.keras.Model, ABC):
 			tape.watch(self.disc.variables)
 			
 			# Form Inputs
-			init_rb_ip = tf.concat([data_rb['init_states'], data_rb['env_goals'], data_rb['her_goals']], 1)
-			curr_exp_ip = tf.concat([data_exp['states'], data_exp['env_goals'], data_exp['her_goals']], 1)
-			next_exp_ip = tf.concat([data_exp['states_2'], data_exp['env_goals'], data_exp['her_goals']], 1)
-			curr_rb_ip = tf.concat([data_rb['states'], data_rb['env_goals'], data_rb['her_goals']], 1)
-			next_rb_ip = tf.concat([data_rb['states_2'], data_rb['env_goals'], data_rb['her_goals']], 1)
+			# init_rb_ip = tf.concat([data_rb['init_states'], data_rb['env_goals'], data_rb['her_goals']], 1)
+			# curr_exp_ip = tf.concat([data_exp['states'], data_exp['env_goals'], data_exp['her_goals']], 1)
+			# next_exp_ip = tf.concat([data_exp['states_2'], data_exp['env_goals'], data_exp['her_goals']], 1)
+			# curr_rb_ip = tf.concat([data_rb['states'], data_rb['env_goals'], data_rb['her_goals']], 1)
+			# next_rb_ip = tf.concat([data_rb['states_2'], data_rb['env_goals'], data_rb['her_goals']], 1)
+			init_rb_ip = tf.concat([data_rb['init_states'], data_rb['her_goals']], 1)
+			curr_exp_ip = tf.concat([data_exp['states'], data_exp['her_goals']], 1)
+			next_exp_ip = tf.concat([data_exp['states_2'], data_exp['her_goals']], 1)
+			curr_rb_ip = tf.concat([data_rb['states'], data_rb['her_goals']], 1)
+			next_rb_ip = tf.concat([data_rb['states_2'], data_rb['her_goals']], 1)
 			
 			disc_expert_inputs = tf.concat([curr_exp_ip, data_exp['actions']], 1)
 			disc_rb_inputs = tf.concat([curr_rb_ip, data_rb['actions']], 1)
@@ -114,7 +124,7 @@ class gDemoDICE(tf.keras.Model, ABC):
 			
 			# Compute the value function
 			init_nu = self.critic(init_rb_ip)
-			expert_nu = self.critic(curr_exp_ip)
+			expert_nu = self.critic(curr_exp_ip)  # not used in loss calc
 			rb_nu = self.critic(curr_rb_ip)
 			rb_nu_next = self.critic(next_rb_ip)
 			
@@ -195,7 +205,11 @@ class gDemoDICE(tf.keras.Model, ABC):
 			action = tf.random.uniform((1, self.args.a_dim), -self.args.action_max, self.args.action_max)
 		# Exploit
 		else:
-			action_mu, _, _ = self.actor(tf.concat([state, env_goal, curr_goal], axis=1))  # a_t = mu(s_t, g_t)
+			action_mu, _, _ = self.actor(tf.concat([state,
+													# env_goal,
+													curr_goal],
+												   axis=1)
+										 )  # a_t = mu(s_t, g_t)
 			action_dev = tf.random.normal(action_mu.shape, mean=0.0, stddev=stddev)
 			action = action_mu + action_dev  # Add noise to action
 			action = tf.clip_by_value(action, -self.args.action_max, self.args.action_max)
@@ -204,16 +218,20 @@ class gDemoDICE(tf.keras.Model, ABC):
 	
 	def build_model(self):
 		_ = self.actor(
-			tf.concat([tf.ones([1, self.args.s_dim]), tf.ones([1, self.args.g_dim]), tf.ones([1, self.args.ag_dim])], axis=1)
+			tf.concat([tf.ones([1, self.args.s_dim]),
+					   # tf.ones([1, self.args.g_dim]),
+					   tf.ones([1, self.args.ag_dim])],
+					  axis=1
+					  )
 		)
 		_ = self.critic(
 			np.ones([1, self.args.s_dim]),
-			np.ones([1, self.args.g_dim]),
+			# np.ones([1, self.args.g_dim]),
 			np.ones([1, self.args.ag_dim])
 		)
 		_ = self.disc(
 			np.ones([1, self.args.s_dim]),
-			np.ones([1, self.args.g_dim]),
+			# np.ones([1, self.args.g_dim]),
 			np.ones([1, self.args.ag_dim]),
 			np.ones([1, self.args.a_dim])
 		)
@@ -370,7 +388,18 @@ class Agent(object):
 		
 		total_time_steps = 0
 		log_step = 0
-		success_rate = []
+		
+		avg_return, avg_time, avg_goal_dist = evaluate_worker(self.eval_worker, args.eval_demos, expert_assist=self.model.expert_assist)
+		max_return = avg_return
+		# Log the data
+		if self.log_wandb:
+			self.wandb_logger.log({
+				'stats/eval_max_return': max_return,
+				'stats/eval_avg_time': avg_time,
+				'stats/eval_avg_goal_dist': avg_goal_dist,
+			}, step=log_step)
+		tf.print(f"Eval Return: {max_return}, Eval Avg Time: {avg_time}, Eval Avg Goal Dist: {avg_goal_dist}")
+		
 		with tqdm(total=args.max_time_steps, desc='') as pbar:
 			
 			while total_time_steps < args.max_time_steps:
@@ -378,29 +407,29 @@ class Agent(object):
 				
 				# Evaluate the policy
 				if log_step % args.eval_interval == 0:
-					avg_return, avg_time, avg_goal_dist = evaluate_worker(self.eval_worker, args.eval_demos,
-																		  expert_assist=self.model.expert_assist)
-					
+					avg_return, avg_time, avg_goal_dist = evaluate_worker(self.eval_worker, args.eval_demos, expert_assist=self.model.expert_assist)
+					if avg_return > max_return:
+						max_return = avg_return
+						self.save_model(os.path.join(args.dir_param, 'best_model'))
 					# Log the data
 					if self.log_wandb:
 						self.wandb_logger.log({
-							'stats/eval_avg_return': avg_return,
+							'stats/eval_max_return': max_return,
 							'stats/eval_avg_time': avg_time,
 							'stats/eval_avg_goal_dist': avg_goal_dist,
 						}, step=log_step)
-					tf.print(
-						f"Eval Avg Return: {avg_return}, Eval Avg Time: {avg_time}, Eval Avg Goal Dist: {avg_goal_dist}")
+					tf.print(f"Eval Return: {avg_return}, Eval Avg Time: {avg_time}, Eval Avg Goal Dist: {avg_goal_dist}")
 				
-				# Epsilon-greedy exploration
-				# Pick high epsilon for args.num_random_actions timesteps, then exponentially decay to 0
-				epsilon = max(0., 1 - total_time_steps / args.num_random_actions)
-				# Randomly pick stddev (noise) for the action
-				stddev = np.random.uniform(0, 0.1)
-				episode, stats = self.policy_worker.generate_rollout(epsilon=tf.constant(epsilon, dtype=tf.float32),
-																	 stddev=tf.constant(stddev, dtype=tf.float32),
-																	 expert_assist=self.model.expert_assist)
-				
-				success_rate.append(stats['ep_success'])
+				# # Epsilon-greedy exploration
+				# # Pick high epsilon for args.num_random_actions timesteps, then exponentially decay to 0
+				# epsilon = max(0., 1 - total_time_steps / args.num_random_actions)
+				# # Randomly pick stddev (noise) for the action
+				# stddev = np.random.uniform(0, 0.1)
+				# episode, stats = self.policy_worker.generate_rollout(epsilon=tf.constant(epsilon, dtype=tf.float32),
+				# 													 stddev=tf.constant(stddev, dtype=tf.float32),
+				# 													 expert_assist=self.model.expert_assist)
+				#
+				# success_rate.append(stats['ep_success'])
 				
 				# # # Add the episode to the buffer (for off-policy training)
 				# self.policy_buffer_unseg.store_episode(episode)
@@ -422,8 +451,8 @@ class Agent(object):
 					self.wandb_logger.log({
 						'policy_buffer_size': self.policy_buffer_unseg.get_current_size_trans(),
 						'expert_buffer_size': self.expert_buffer_unseg.get_current_size_trans(),
-						'stats/train_ep_success': stats['ep_success'],
-						'stats/train_success_rate': np.mean(success_rate),
+						# 'stats/train_ep_success': stats['ep_success'],
+						# 'stats/train_success_rate': np.mean(success_rate),
 					}, step=log_step)
 				
 				# Update
@@ -460,11 +489,11 @@ def run(args):
 	n_objs = 2 if args.two_object else 1
 	expert_buffer_unseg = ReplayBufferTf(
 		get_buffer_shape(args), args.buffer_size, args.horizon,
-		sample_her_transitions('random_unsegmented', state_to_goal(n_objs))
+		sample_transitions('random_unsegmented', state_to_goal(n_objs))
 	)
 	policy_buffer_unseg = ReplayBufferTf(
 		get_buffer_shape(args), args.buffer_size, args.horizon,
-		sample_her_transitions('random_unsegmented', state_to_goal(n_objs))
+		sample_transitions('random_unsegmented', state_to_goal(n_objs))
 	)
 	
 	train_data_path = os.path.join(args.dir_data, '{}{}_train.pkl'.format(data_prefix,
@@ -478,12 +507,15 @@ def run(args):
 	else:
 		logger.info("Loading Expert Demos from {} into TrainBuffer for training.".format(train_data_path))
 		# Store the expert data in the expert buffer -> D_E
-		expert_buffer_unseg.load_data_into_buffer(train_data_path)
+		expert_buffer_unseg.load_data_into_buffer(train_data_path,
+												  num_demos_to_load=args.expert_demos)
 		
 		# Store the expert data in the policy buffer for DemoDICE -> D_U = D_E + D_I
-		policy_buffer_unseg.load_data_into_buffer(train_data_path)
-		# BC offline data
-		policy_buffer_unseg.load_data_into_buffer(os.path.join(f'./logging/{data_prefix}BC', 'BC_50_noisyRollouts.pkl'),
+		policy_buffer_unseg.load_data_into_buffer(train_data_path,
+												  num_demos_to_load=args.expert_demos)
+		# # BC offline data
+		policy_buffer_unseg.load_data_into_buffer(f'./pnp_data/BC_{data_prefix}offline_data.pkl',
+												  num_demos_to_load=args.imperfect_demos,
 												  clear_buffer=False)
 	
 	# ########################################################################################################### #

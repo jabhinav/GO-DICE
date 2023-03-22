@@ -102,8 +102,11 @@ class RolloutWorker:
 			self.policy.reset(curr_state, g_env)
 		
 		# For Model, reset its expert guide policy if expert_assist is True
-		if expert_assist and hasattr(self.policy, 'expert_guide'):
-			tf.numpy_function(func=self.policy.expert_guide.reset, inp=[curr_state, g_env], Tout=[])
+		if expert_assist:
+			if hasattr(self.policy, 'expert_guide'):
+				tf.numpy_function(func=self.policy.expert_guide.reset, inp=[curr_state, g_env], Tout=[])
+			else:
+				raise ValueError("Expert guide not found for the model policy!")
 		
 		curr_goal = curr_state[:3]  # g_-1 = s_0 (gripper pos in the state)
 		curr_skill = tf.one_hot(np.array([0]), depth=3, dtype=tf.float32)  # c_-1 = [1, 0, 0]

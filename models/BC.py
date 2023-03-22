@@ -15,7 +15,7 @@ from tqdm import tqdm
 from domains.PnP import MyPnPEnvWrapper
 from domains.PnPExpert import PnPExpert, PnPExpertTwoObj
 from her.replay_buffer import ReplayBufferTf
-from her.transitions import sample_non_her_transitions
+from her.transitions import sample_transitions
 from her.rollout import RolloutWorker
 from networks.general import Actor
 from utils.buffer import get_buffer_shape
@@ -162,7 +162,7 @@ class Agent(object):
 			self.wandb_logger = wandb.init(project='DICE', config=vars(args), id='BC_{}'.format(current_time))
 		
 		
-	def store_offline_data(self, num_traj=50):
+	def store_offline_data(self, num_traj=100):
 		# Store the data from the expert
 		for i in range(num_traj):
 			# Randomly pick epsilon
@@ -253,6 +253,17 @@ class Agent(object):
 		
 		total_timesteps = 0
 		log_step = 0
+		
+		avg_return, avg_time, avg_goal_dist = evaluate_worker(self.eval_worker, args.eval_demos)
+		max_return = avg_return
+		# Log the data
+		if self.log_wandb:
+			self.wandb_logger.log({
+				'stats/eval_max_return': max_return,
+				'stats/eval_avg_time': avg_time,
+				'stats/eval_avg_goal_dist': avg_goal_dist,
+			}, step=log_step)
+		tf.print(f"Eval Return: {max_return}, Eval Avg Time: {avg_time}, Eval Avg Goal Dist: {avg_goal_dist}")
 
 		with tqdm(total=args.max_time_steps, desc='') as pbar:
 			
@@ -261,15 +272,17 @@ class Agent(object):
 				# Evaluate the policy
 				if log_step % args.eval_interval == 0:
 					avg_return, avg_time, avg_goal_dist = evaluate_worker(self.eval_worker, args.eval_demos)
-					
+					if avg_return > max_return:
+						max_return = avg_return
+						self.save_model(os.path.join(args.dir_param, 'best_model'))
 					# Log the data
 					if self.log_wandb:
 						self.wandb_logger.log({
-							'stats/eval_avg_return': avg_return,
+							'stats/eval_max_return': max_return,
 							'stats/eval_avg_time': avg_time,
 							'stats/eval_avg_goal_dist': avg_goal_dist,
 						}, step=log_step)
-					tf.print(f"Eval Avg Return: {avg_return}, Eval Avg Time: {avg_time}, Eval Avg Goal Dist: {avg_goal_dist}")
+					tf.print(f"Eval Return: {avg_return}, Eval Avg Time: {avg_time}, Eval Avg Goal Dist: {avg_goal_dist}")
 					
 				total_timesteps += args.horizon
 				
@@ -302,19 +315,19 @@ def run(args):
 	elif args.fix_object and not args.fix_goal:
 		data_prefix = 'fOdG_'
 	else:
-		data_prefix = ''
+		data_prefix = 'dOdG_'
 	
 	# ######################################################################################################## #
 	# ############################################# DATA LOADING ############################################# #
 	# ######################################################################################################## #
 	# Load Buffer to store expert data
 	expert_buffer_unseg = ReplayBufferTf(
-		get_buffer_shape(args), args.buffer_size, args.horizon, sample_non_her_transitions('random_unsegmented')
+		get_buffer_shape(args), args.buffer_size, args.horizon, sample_transitions('random_unsegmented')
 	)
 	
 	# Keep a buffer to store BC generated data
 	policy_buffer_unseg = ReplayBufferTf(
-		get_buffer_shape(args), args.buffer_size, args.horizon, sample_non_her_transitions('random_unsegmented')
+		get_buffer_shape(args), args.buffer_size, args.horizon, sample_transitions('random_unsegmented')
 	)
 	
 	train_data_path = os.path.join(args.dir_data, '{}{}_train.pkl'.format(data_prefix,
@@ -326,7 +339,7 @@ def run(args):
 		sys.exit(-1)
 	else:
 		logger.info("Loading Expert Demos from {} into TrainBuffer for training.".format(train_data_path))
-		expert_buffer_unseg.load_data_into_buffer(train_data_path)
+		expert_buffer_unseg.load_data_into_buffer(train_data_path, num_demos_to_load=args.expert_demos)
 	
 	# ########################################################################################################### #
 	# ############################################# TRAINING #################################################### #

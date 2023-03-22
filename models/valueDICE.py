@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from domains.PnP import MyPnPEnvWrapper
 from her.replay_buffer import ReplayBufferTf
-from her.transitions import sample_non_her_transitions
+from her.transitions import sample_transitions
 from her.rollout import RolloutWorker
 from networks.general import Actor, Critic
 from utils.buffer import get_buffer_shape
@@ -436,10 +436,10 @@ def run(args):
 	# ######################################################################################################## #
 	# Load Buffer to store expert data
 	expert_buffer_unseg = ReplayBufferTf(
-		get_buffer_shape(args), args.buffer_size, args.horizon, sample_non_her_transitions('random_unsegmented')
+		get_buffer_shape(args), args.buffer_size, args.horizon, sample_transitions('random_unsegmented')
 	)
 	policy_buffer_unseg = ReplayBufferTf(
-		get_buffer_shape(args), args.buffer_size, args.horizon, sample_non_her_transitions('random_unsegmented')
+		get_buffer_shape(args), args.buffer_size, args.horizon, sample_transitions('random_unsegmented')
 	)
 	
 	train_data_path = os.path.join(args.dir_data, '{}{}_train.pkl'.format(data_prefix,
