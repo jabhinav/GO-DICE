@@ -1,5 +1,8 @@
+from typing import Tuple
+
 import tensorflow as tf
 from keras.layers import Dense, Flatten
+from utils.sample import gumbel_softmax_tf
 import tensorflow_probability as tfp
 import numpy as np
 
@@ -57,9 +60,9 @@ class GoalPredictor(tf.keras.Model):
         return g
     
 
-class SkillPredictor(tf.keras.Model):
+class BCSkillPredictor(tf.keras.Model):
     def __init__(self, c_dim):
-        super(SkillPredictor, self).__init__()
+        super(BCSkillPredictor, self).__init__()
         self.fc1 = Dense(units=256, activation=tf.nn.relu)
         self.fc2 = Dense(units=256, activation=tf.nn.relu)
         self.fc3 = Dense(units=128, activation=tf.nn.relu)
@@ -137,6 +140,8 @@ class Actor(tf.keras.Model):
         self.MEAN_MIN, self.MEAN_MAX = -7, 7
         self.LOG_STD_MIN, self.LOG_STD_MAX = -5, 2
         self.eps = np.finfo(np.float32).eps
+        
+        self.train = True
     
     def get_dist_and_mode(self, states):
         out = self.base(states)
@@ -164,7 +169,6 @@ class Actor(tf.keras.Model):
         pretanh_log_probs = pretanh_action_dist.log_prob(pretanh_actions)
 
         log_probs = pretanh_log_probs - tf.reduce_sum(tf.math.log(1 - actions ** 2 + self.eps), axis=-1)
-        log_probs = tf.expand_dims(log_probs, -1)  # To avoid broadcasting
         return log_probs
     
     @tf.function
@@ -187,6 +191,252 @@ class Actor(tf.keras.Model):
         log_probs = tf.expand_dims(log_probs, -1)  # To avoid broadcasting
         
         return tf.tanh(mode), actions, log_probs
+
+
+class Director(tf.keras.Model):
+    def __init__(self, skill_dim):
+        super(Director, self).__init__()
+
+        self.base = tf.keras.Sequential([
+            Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
+            Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
+            Dense(units=128, activation=tf.nn.relu, kernel_initializer='he_normal'),
+            Dense(units=skill_dim, kernel_initializer='he_normal')
+        ])
+        
+        self.train = True
+
+    def get_dist_and_mode(self, states):
+        logits = self.base(states)
+        return logits
+    
+    @tf.function
+    def get_log_prob(self, states, curr_skills=None):
+        """Evaluate log probs for current skill conditioned on states.
+        Args:
+          states: A batch of states.
+          curr_skills: A batch of current skills to evaluate log probs on.
+        Returns:
+          Log probabilities of skills.
+        """
+        logits = self.get_dist_and_mode(states)
+        log_probs = tf.nn.log_softmax(logits, axis=-1)  # (batch_size, skill_dim)
+        if curr_skills is not None:
+            # Current skills is a one-hot vector
+            log_probs = tf.reduce_sum(log_probs * curr_skills, axis=-1)
+            
+        return log_probs
+    
+    @tf.function
+    def call(self, states):
+        """Computes skills for given inputs.
+        Args:
+          states: A batch of states.
+        Returns:
+             (1) skill probability distribution i.e. softmax of logits,
+             (2) a sampled skill using Gumbel-Softmax trick and multinomial sampling,
+             (3) log probability of the sampled skill.
+        """
+        logits = self.get_dist_and_mode(states)
+        
+        if self.train:
+            # Sample skills from the distribution. Use Gumbel-Softmax trick to sample from a categorical distribution.
+            skills = gumbel_softmax_tf(logits, hard=False)
+        else:
+            # Get skills from the distribution.
+            skills = tf.one_hot(tf.argmax(logits, axis=-1), depth=logits.shape[-1])
+            
+        # Compute log probs
+        log_probs = tf.nn.log_softmax(logits, axis=-1)
+        log_probs = tf.reduce_sum(log_probs * skills, axis=-1)
+        log_probs = tf.expand_dims(log_probs, -1)  # To avoid broadcasting
+        
+        return tf.nn.softmax(logits), skills, log_probs
+        
+        
+class SkilledActors(tf.keras.Model):
+    def __init__(self, action_dim: int, skill_dim: int):
+        super(SkilledActors, self).__init__()
+        
+        self.action_dim = action_dim
+        self.skill_dim = skill_dim
+        
+        # For each skill, we have a separate actor
+        self.actors = [Actor(action_dim) for _ in range(skill_dim)]
+        
+        # Have a skill predictor for each skill (we call them directors)
+        self.directors = [Director(skill_dim) for _ in range(skill_dim)]
+        
+        self.MEAN_MIN, self.MEAN_MAX = -7, 7
+        self.LOG_STD_MIN, self.LOG_STD_MAX = -5, 2
+        self.eps = np.finfo(np.float32).eps
+        
+    def get_variables(self):
+        # Function to get variables of all the networks
+        return self.trainable_variables
+    
+    def change_training_mode(self, training_mode: bool):
+        """Change the training mode of the model.
+        For categorical skills, it changes sampling mode (Gumbel to argmax).
+        Args:
+          training_mode: A boolean indicating whether to train or not.
+        """
+        for actor in self.actors:
+            actor.train = training_mode
+        for skill_predictor in self.directors:
+            skill_predictor.train = training_mode
+
+    @tf.function
+    def get_actor_log_probs(self, states, curr_skills=None, actions=None):
+        """Computes log probabilities of actions for given inputs.
+            Args:
+              states: A batch of current states.
+              curr_skills: A batch of current skills.
+              actions: A batch of actions.
+            Returns:
+              A batch of log probabilities of the actions.
+        """
+        op = [actor.get_log_prob(states, actions) for actor in self.actors]
+        log_probs = tf.stack(op, axis=1)  # (batch_size, skill_dim, 1)
+        if curr_skills is not None:
+            log_probs = tf.reduce_sum(log_probs * curr_skills, axis=1)
+        
+        log_probs = tf.expand_dims(log_probs, -1)  # To avoid broadcasting
+        return log_probs
+    
+    @tf.function
+    def call_actor(self, states, curr_skills=None):
+        """Computes actions for given states.
+        Args:
+          states: A batch of current states.
+          curr_skills: A batch of current skills.
+        Returns:
+          A mode action, a sampled action and log probability of the sampled action.
+        """
+        # Get the action by each skilled actor -> List of (mode, action, log_prob)
+        op = [actor(states) for actor in self.actors]
+        # Get the mode, action and log_prob for each skill
+        modes, actions, log_probs = zip(*op)
+        
+        # Stack them to get a tensor of shape (batch_size, skill_dim, action_dim)
+        modes = tf.stack(modes, axis=1)
+        actions = tf.stack(actions, axis=1)
+        log_probs = tf.stack(log_probs, axis=1)
+        
+        # Get the mode, action and log_prob for the given skill
+        if curr_skills is not None:
+            curr_skills = tf.expand_dims(curr_skills, -1)  # To avoid broadcasting
+            modes = tf.reduce_sum(modes * curr_skills, axis=1)
+            actions = tf.reduce_sum(actions * curr_skills, axis=1)
+            log_probs = tf.reduce_sum(log_probs * curr_skills, axis=1)
+        
+        return modes, actions, log_probs
+
+    @tf.function
+    def get_director_log_probs(self, states, prev_skills=None, curr_skills=None):
+        """Computes log probabilities of next skills for given inputs.
+            Args:
+              states: A batch of current states.
+              prev_skills: A batch of previous skills.
+              curr_skills: A batch of current skills.
+            Returns:
+              A batch of log probabilities of the next skills.
+        """
+        op = [director.get_log_prob(states, curr_skills) for director in self.directors]
+        log_probs = tf.stack(op, axis=1)  # (batch_size, prev_skill_dim) or (batch_size, prev_skill_dim, curr_skill_dim)
+        if prev_skills is not None:
+            
+            # If log probs is (batch_size, prev_skill_dim)
+            if len(log_probs.shape) == 2:
+                log_probs = tf.reduce_sum(log_probs * prev_skills, axis=1)  # (batch_size,)
+                log_probs = tf.expand_dims(log_probs, -1)  # (batch_size, 1)
+            
+            # If log probs is (batch_size, prev_skill_dim, curr_skill_dim)
+            else:
+                log_probs = log_probs * tf.expand_dims(prev_skills, -1)  # (batch_size, prev_skill_dim, curr_skill_dim)
+                log_probs = tf.reduce_sum(log_probs, axis=1)  # (batch_size, curr_skill_dim)
+        return log_probs
+
+    @tf.function
+    def call_director(self, states, prev_skills=None):
+        """Directs skills for given states.
+        Args:
+          states: A batch of current states.
+          prev_skills: A batch of previous skills.
+        Returns:
+          The next predicted skill probabilities, a sampled skill and log probability of the sampled skill
+        """
+        # Get the predicted skill by each skill predictor
+        op = [director(states) for director in self.directors]
+        # Unpack
+        next_skill_probs, next_skills, next_skill_log_probs = zip(*op)
+    
+        # Stack them to get a tensor of shape (batch_size, (prev)skill_dim, (curr)skill_dim)
+        next_skill_probs = tf.stack(next_skill_probs, axis=1)
+        next_skills = tf.stack(next_skills, axis=1)
+        next_skill_log_probs = tf.stack(next_skill_log_probs, axis=1)
+    
+        # Get the next skill probabilities, next skill and next skill log probability for the given skill
+        if prev_skills is not None:
+            prev_skills = tf.expand_dims(prev_skills, -1)  # (batch_size, prev_skill_dim, 1)
+            next_skill_probs = tf.reduce_sum(next_skill_probs * prev_skills, axis=1)
+            next_skills = tf.reduce_sum(next_skills * prev_skills, axis=1)
+            next_skill_log_probs = tf.reduce_sum(next_skill_log_probs * prev_skills, axis=1)
+    
+        return next_skill_probs, next_skills, next_skill_log_probs
+
+    
+    def compute_max_path_viterbi(self, log_probs, init_skill):
+        """
+        Computes the Viterbi path. Use numpy
+        """
+        num_decoding_steps = log_probs.shape[0]
+        init_skill = np.reshape(init_skill, (1, -1))  # 1 x (prev)skill_dim
+        
+        # Initialise the forward messages (gather t=0 corresponding to prev_skill=init_skill)
+        mu = log_probs[0]  # (prev)skill_dim x (curr)skill_dim
+        # Collect the current skill distribution based on prev_skill = init_skill
+        mu = np.matmul(init_skill, mu)  # 1 x (curr)skill_dim
+        
+        mu_path = np.zeros((num_decoding_steps, self.skill_dim), dtype=np.float32)
+        # Assign the vectorised initial skill to the max path at t=0
+        mu_path[0] = np.argmax(init_skill)
+        
+        # Decode  c_{0} to c_{t = T-1} (total T steps)
+        for t in range(1, num_decoding_steps):
+            # Add mu(it's now corresponding to prev_skill) to the log probs to get the next forward message
+            accumulate_log_prob_t = np.reshape(mu, (-1, 1)) + log_probs[t]  # (prev)skill_dim x (curr)skill_dim
+            mu_path[t] = np.argmax(accumulate_log_prob_t, axis=-2)  # (curr)skill_dim
+            mu = np.max(accumulate_log_prob_t, axis=-2)  # (curr)skill_dim
+        
+        # Backward pass to get the Viterbi path
+        path = np.zeros((num_decoding_steps + 1, 1), dtype=np.int32)
+        path[-1] = np.argmax(mu)
+        log_prob_traj = np.max(mu)
+        for t in range(num_decoding_steps, 0, -1):
+            path[t-1] = mu_path[t - 1, path[t]]  # Here we are using the max path to get the previous skill
+            
+        return path, log_prob_traj
+    
+    @tf.function
+    def viterbi_decode(self, states, actions, init_skill):
+        """
+        Computes the Viterbi path for the given
+        > states (T x s_dim),
+        > actions (T x a_dim)
+        > init_skill (skill_dim,) one-hot vector
+        """
+        
+        log_pis = self.get_actor_log_probs(states, None, actions)  # T x (curr)skill_dim x 1
+        log_pis = tf.reshape(log_pis, (states.shape[0], 1, self.skill_dim))  # T x 1 x (curr)skill_dim
+        log_trs = self.get_director_log_probs(states, None, None)  # T x (prev)skill_dim x (curr)skill_dim
+        log_probs = log_pis + log_trs  # T x (prev)skill_dim x (curr)skill_dim
+        
+        path, log_prob_traj = tf.numpy_function(self.compute_max_path_viterbi,
+                                                [log_probs, init_skill],
+                                                [tf.int32, tf.float32])
+        
+        return path, log_prob_traj
     
     
 class oldActor(tf.keras.Model):

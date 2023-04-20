@@ -15,7 +15,7 @@ from domains.PnP import MyPnPEnvWrapper
 from domains.PnPExpert import PnPExpert, PnPExpertTwoObj
 from her.replay_buffer import ReplayBufferTf
 from her.transitions import sample_transitions
-from networks.general import Actor, GoalPredictor, SkillPredictor, SkillTerminationPredictor
+from networks.general import Actor, GoalPredictor, BCSkillPredictor, SkillTerminationPredictor
 from utils.buffer import get_buffer_shape
 from utils.env import get_PnP_env
 
@@ -45,7 +45,7 @@ class GoalGuidedOptionBC(tf.keras.Model, ABC):
 			setattr(self, "optimST_{}".format(i), tf.keras.optimizers.Adam(self.args.vae_lr))
 		
 		# Declare the skill predictor
-		self.skill_pred = SkillPredictor(args.c_dim)
+		self.skill_pred = BCSkillPredictor(args.c_dim)
 		self.optimS = tf.keras.optimizers.Adam(self.args.vae_lr)
 		
 		# Alternate: Predict both goal and skill simultaneously
@@ -61,9 +61,9 @@ class GoalGuidedOptionBC(tf.keras.Model, ABC):
 		exp_env = get_PnP_env(args)
 		num_skills = exp_env.latent_dim
 		if args.two_object:
-			self.expert_guide = PnPExpertTwoObj(num_skills, expert_behaviour=args.expert_behaviour)
+			self.expert_guide = PnPExpertTwoObj(expert_behaviour=args.expert_behaviour, wrap_skill_id=args.wrap_skill_id)
 		else:
-			self.expert_guide = PnPExpert(num_skills)
+			self.expert_guide = PnPExpert()
 		self.use_expert_policy = use_expert_policy
 		self.use_expert_goal = use_expert_goal
 		self.use_expert_skill = use_expert_skill

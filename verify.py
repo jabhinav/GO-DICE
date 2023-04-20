@@ -12,91 +12,76 @@ from utils.env import get_PnP_env
 logger = logging.getLogger(__name__)
 
 
-def run_gpred(args):
-	tf.config.run_functions_eagerly(True)  # To render, must run eagerly
-	test_model = 'models_best' + ('_two_obj_{}'.format(args.expert_behaviour) if args.two_object else '_one_obj')
-	dir_test = os.path.join(args.dir_test, test_model)
+def run_verify(args):
+	args.log_wandb = False
+	dir_test = './logging/run20230419-224924/models'
 	
 	# ############################################# TESTING #################################################### #
-	if args.model == 'goalOptionBC':
-		from models.goalGuidedOptionBC import Agent as Agent_goalGuidedOptionBC
-		agent_test = Agent_goalGuidedOptionBC(args)
-	else:
-		logger.error("Model not supported for testing.")
-		sys.exit(-1)
+	print("\n------------- Verifying SkilledActor at {} -------------".format(dir_test))
+	from models.skilledDemoDICE import Agent as Agent_skilledDemoDICE
+	agent = Agent_skilledDemoDICE(args)
 	
-	print("\n------------- Verifying Goal&SkillPred at {} -------------".format(dir_test))
 	logger.info("Loading Model Weights from {}".format(dir_test))
-	agent_test.load_model(dir_param=dir_test)
+	agent.load_model(dir_param=dir_test)
 	
-	# ############################################# EXPERT WORKER ############################################# #
-	exp_env = get_PnP_env(args)
-	
-	if args.two_object:
-		expert_policy = PnPExpertTwoObj(exp_env.latent_dim, expert_behaviour=args.expert_behaviour)
-	else:
-		expert_policy = PnPExpert(exp_env.latent_dim)
-	
-	# Initiate a worker to generate expert rollouts
-	expert_worker = RolloutWorker(
-		exp_env, expert_policy, T=args.horizon, rollout_terminate=args.rollout_terminate, render=False,
-		is_expert_worker=True
-	)
-	
-	# ############################################# MODEL WORKER ############################################# #
-	policy_worker = RolloutWorker(
-		exp_env, agent_test.model, T=args.horizon, rollout_terminate=args.rollout_terminate, render=True,
-		is_expert_worker=False
-	)
-	
+	agent.visualise(use_expert_skill=True, use_expert_action=True)
+
+	# # ############################################# EXPERT WORKER ############################################# #
+	# exp_env = get_PnP_env(args)
+	#
+	# if args.two_object:
+	# 	expert_policy = PnPExpertTwoObj(expert_behaviour=args.expert_behaviour, wrap_skill_id=args.wrap_skill_id)
+	# else:
+	# 	expert_policy = PnPExpert()
+	#
 	# policy_worker.policy.use_expert_policy = True
 	# policy_worker.policy.use_expert_goal = True
 	# policy_worker.policy.use_expert_skill = True
 	
-	# ###################################### TEST ON TRAIN ENVS ####################################### #
-	env_state_dir = os.path.join(
-		args.dir_data, '{}_env_states_train'.format(
-			'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
-	env_state_paths = [os.path.join(env_state_dir, 'env_{}.pkl'.format(n)) for n in range(args.train_demos)]
-	test_demos = min(args.test_demos, args.train_demos)
-	for n in range(test_demos):
-		print('Train Demo: ', n)
-		logger.info("\nTesting Train Demo {}".format(n))
-		
-		with open(env_state_paths[n], 'rb') as handle:
-			init_state_dict = pickle.load(handle)
-			init_state_dict['goal'] = init_state_dict['goal'].numpy() if tf.is_tensor(init_state_dict['goal']) else \
-				init_state_dict['goal']
-		
-		exp_episode, _ = expert_worker.generate_rollout(init_state_dict=init_state_dict)
-		
-		policy_episode, _ = policy_worker.generate_rollout(init_state_dict=init_state_dict, expert_assist=True)
-	
+	# # ###################################### TEST ON TRAIN ENVS ####################################### #
+	# env_state_dir = os.path.join(
+	# 	args.dir_data, '{}_env_states_train'.format(
+	# 		'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
+	# env_state_paths = [os.path.join(env_state_dir, 'env_{}.pkl'.format(n)) for n in range(args.train_demos)]
+	# test_demos = min(args.test_demos, args.train_demos)
+	# for n in range(test_demos):
+	# 	print('Train Demo: ', n)
+	# 	logger.info("\nTesting Train Demo {}".format(n))
+	#
+	# 	with open(env_state_paths[n], 'rb') as handle:
+	# 		init_state_dict = pickle.load(handle)
+	# 		init_state_dict['goal'] = init_state_dict['goal'].numpy() if tf.is_tensor(init_state_dict['goal']) else \
+	# 			init_state_dict['goal']
+	#
+	# 	exp_episode, _ = expert_worker.generate_rollout(init_state_dict=init_state_dict)
+	#
+	# 	policy_episode, _ = policy_worker.generate_rollout(init_state_dict=init_state_dict, expert_assist=True)
+	#
 	# ###################################### TEST ON VAL ENVS ####################################### #
-	env_state_dir = os.path.join(
-		args.dir_data, '{}_env_states_val'.format(
-			'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
-	env_state_paths = [os.path.join(env_state_dir, 'env_{}.pkl'.format(n)) for n in range(args.val_demos)]
-	
-	avg_skill_pred_accuracy = 0.
-	avg_skill_term_pred_accuracy = 0.
-	avg_skill_term_pred_precision = 0.
-	avg_skill_term_pred_recall = 0.
-	test_demos = min(args.test_demos, args.val_demos)
-	for n in range(test_demos):
-		print('Val Demo: ', n)
-		logger.info("\nTesting Val Demo {}".format(n))
-		
-		with open(env_state_paths[n], 'rb') as handle:
-			init_state_dict = pickle.load(handle)
-			init_state_dict['goal'] = init_state_dict['goal'].numpy() if tf.is_tensor(init_state_dict['goal']) else \
-				init_state_dict['goal']
-		
-		exp_episode, _ = expert_worker.generate_rollout(init_state_dict=init_state_dict)
-		
-		policy_episode, _ = policy_worker.generate_rollout(init_state_dict=init_state_dict, expert_assist=True)
-		
-	
+	# env_state_dir = os.path.join(
+	# 	args.dir_data, '{}_env_states_val'.format(
+	# 		'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
+	# env_state_paths = [os.path.join(env_state_dir, 'env_{}.pkl'.format(n)) for n in range(args.val_demos)]
+	#
+	# avg_skill_pred_accuracy = 0.
+	# avg_skill_term_pred_accuracy = 0.
+	# avg_skill_term_pred_precision = 0.
+	# avg_skill_term_pred_recall = 0.
+	# test_demos = min(args.test_demos, args.val_demos)
+	# for n in range(test_demos):
+	# 	print('Val Demo: ', n)
+	# 	logger.info("\nTesting Val Demo {}".format(n))
+	#
+	# 	with open(env_state_paths[n], 'rb') as handle:
+	# 		init_state_dict = pickle.load(handle)
+	# 		init_state_dict['goal'] = init_state_dict['goal'].numpy() if tf.is_tensor(init_state_dict['goal']) else \
+	# 			init_state_dict['goal']
+	#
+	# 	exp_episode, _ = expert_worker.generate_rollout(init_state_dict=init_state_dict)
+	#
+	# 	policy_episode, _ = policy_worker.generate_rollout(init_state_dict=init_state_dict, expert_assist=True)
+	#
+	#
 	# # Current goal
 	# policy_goals = agent_test.model.goal_pred(exp_episode['prev_skills'][0],
 	# 										  exp_episode['states'][0, :-1, :],

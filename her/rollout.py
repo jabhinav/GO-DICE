@@ -64,7 +64,7 @@ class RolloutWorker:
 		return curr_state, curr_ag, curr_g
 	
 	@tf.function
-	def generate_rollout(self, reset=True, resume_state_dict=None, expert_assist=False, epsilon=0.0, stddev=0.0):
+	def generate_rollout(self, reset=True, resume_state_dict=None, epsilon=0.0, stddev=0.0):
 		# Get the tuple (s_t, s_t+1, g_t, g_t-1, c_t, c_t-1, a_t)
 		prev_goals = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)  # g_t-1
 		prev_skills = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)  # c_t-1
@@ -100,48 +100,50 @@ class RolloutWorker:
 		# For Expert, reset its policy to reset its internal state
 		if self.is_expert_worker:
 			self.policy.reset(curr_state, g_env)
-		
-		# For Model, reset its expert guide policy if expert_assist is True
-		if expert_assist:
-			if hasattr(self.policy, 'expert_guide'):
-				tf.numpy_function(func=self.policy.expert_guide.reset, inp=[curr_state, g_env], Tout=[])
+		else:
+			if hasattr(self.policy, 'expert'):
+				tf.numpy_function(func=self.policy.expert.reset, inp=[curr_state, g_env], Tout=[])
 			else:
-				raise ValueError("Expert guide not found for the model policy!")
+				logger.info("Expert guide not found for the model policy!")
 		
-		curr_goal = curr_state[:3]  # g_-1 = s_0 (gripper pos in the state)
-		curr_skill = tf.one_hot(np.array([0]), depth=3, dtype=tf.float32)  # c_-1 = [1, 0, 0]
+		curr_goal = self.policy.get_init_goal(curr_state, g_env)  # g_0 = g_env
+		# # InitSkill: Ask the actor to predict the init skill. If expert, must be called after reset
+		curr_skill = self.policy.get_init_skill()
 		
 		for t in tf.range(self.horizon):
-			# Sleep to slow down the simulation
+			# # Sleep to slow down the simulation
 			# time.sleep(0.1)
 			
+			# # Reshape the tensors
 			curr_state = tf.reshape(curr_state, shape=(1, -1))
 			g_env = tf.reshape(g_env, shape=(1, -1))
 			curr_goal = tf.reshape(curr_goal, shape=(1, -1))
 			curr_skill = tf.reshape(curr_skill, shape=(1, -1))
 			
-			# Save g_{t-1}, c_{t-1}, s_t, g_env
+			# # [[Save]] g_{t-1}, c_{t-1}, s_t, g_env
 			prev_goals = prev_goals.write(t, tf.squeeze(tf.cast(curr_goal, dtype=tf.float32)))
 			prev_skills = prev_skills.write(t, tf.squeeze(tf.cast(curr_skill, dtype=tf.float32)))
 			states = states.write(t, tf.squeeze(curr_state))
 			env_goal = env_goal.write(t, tf.squeeze(g_env))
 			
+			# # Act using the policy -> Get g_t, c_t, a_t
 			curr_goal, curr_skill, action = self.policy.act(state=curr_state, env_goal=g_env,
 															prev_goal=curr_goal, prev_skill=curr_skill,
 															epsilon=epsilon, stddev=stddev)
 			
-			# Save g_t, c_t, a_t
+			# # [[Save]] g_t, c_t, a_t
 			curr_goals = curr_goals.write(t, tf.squeeze(tf.cast(curr_goal, dtype=tf.float32)))
 			curr_skills = curr_skills.write(t, tf.squeeze(tf.cast(curr_skill, dtype=tf.float32)))
 			actions = actions.write(t, tf.squeeze(tf.cast(action, dtype=tf.float32)))
 			
 			try:
+				# # Transition to the next state: s_{t+1}
 				curr_state, _, g_env, done, distance = tf.numpy_function(func=self.env.step,
 																		 inp=[action, self.render],
 																		 Tout=[tf.float32, tf.float32,
 																			   tf.float32, tf.int32, tf.float32])
 				
-				# Save s_{t+1}, done, distance
+				# # [[Save]] s_{t+1}, done, distance
 				states_2 = states_2.write(t, tf.squeeze(curr_state))  # s_t+1
 				successes = successes.write(t, float(done))
 				distances = distances.write(t, distance)
@@ -152,7 +154,7 @@ class RolloutWorker:
 			except MujocoException:
 				self.generate_rollout(reset=True)
 		
-		# Save the terminal state and corresponding achieved goal
+		# [[Save]] s_T
 		states = states.write(t+1, tf.squeeze(curr_state))
 		env_goal = env_goal.write(t+1, tf.squeeze(g_env))
 		
@@ -173,16 +175,16 @@ class RolloutWorker:
 		distances = distances.stack()
 		
 		episode = dict(
-			prev_goals=tf.expand_dims(prev_goals, axis=0),
-			prev_skills=tf.expand_dims(prev_skills, axis=0),
-			states=tf.expand_dims(states, axis=0),
-			env_goals=tf.expand_dims(env_goal, axis=0),
-			curr_goals=tf.expand_dims(curr_goals, axis=0),
-			curr_skills=tf.expand_dims(curr_skills, axis=0),
-			actions=tf.expand_dims(actions, axis=0),
-			states_2=tf.expand_dims(states_2, axis=0),
-			successes=tf.expand_dims(successes, axis=0),
-			distances=tf.expand_dims(distances, axis=0)
+			prev_goals=tf.expand_dims(prev_goals, axis=0),  # (T, goal_dim)
+			prev_skills=tf.expand_dims(prev_skills, axis=0),  # (T, skill_dim)
+			states=tf.expand_dims(states, axis=0),  # (T+1, state_dim)
+			env_goals=tf.expand_dims(env_goal, axis=0),  # (T+1, goal_dim)
+			curr_goals=tf.expand_dims(curr_goals, axis=0),  # (T, goal_dim)
+			curr_skills=tf.expand_dims(curr_skills, axis=0),  # (T, skill_dim)
+			actions=tf.expand_dims(actions, axis=0),  # (T, action_dim)
+			states_2=tf.expand_dims(states_2, axis=0),  # (T, state_dim)
+			successes=tf.expand_dims(successes, axis=0),  # (T, 1)
+			distances=tf.expand_dims(distances, axis=0)   # (T, 1)
 		)
 		
 		# success_rate = tf.reduce_mean(tf.cast(successes, tf.float32)) #

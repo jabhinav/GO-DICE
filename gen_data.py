@@ -6,9 +6,10 @@ import pickle
 import logging
 import tensorflow as tf
 import numpy as np
+from typing import Dict
 from utils.env import get_PnP_env
 from utils.buffer import get_buffer_shape
-from domains.PnPExpert import PnPExpert, PnPExpertTwoObj
+from domains.PnPExpert import PnPExpert, PnPExpertTwoObj, PnPExpertTwoObjImitator
 from her.rollout import RolloutWorker
 from her.replay_buffer import ReplayBufferTf
 from utils.plot import plot_metrics
@@ -30,137 +31,111 @@ logging.basicConfig(filename=os.path.join(log_dir, 'logs.txt'), filemode='w',
 logger = logging.getLogger(__name__)
 
 
+def merge_pick_drop(args, episode: Dict[str, tf.Tensor]):
+	# Each Tensor in episode is of shape (num_episodes, horizon, dim)
+	# Merge pick and drop into one skill and retain drop
+	
+	# Case: 1
+	if args.wrap_skill_id == '0':
+		# combine pick and grab [1, 0, 0] -> [1] and [0, 1, 0] -> [1]
+		temp = episode['curr_skills'][:, :, 0] + episode['curr_skills'][:, :, 1]
+		episode['curr_skills'] = tf.stack([temp, episode['curr_skills'][:, :, 2]], axis=-1)
+		
+		temp = episode['prev_skills'][:, :, 0] + episode['prev_skills'][:, :, 1]
+		episode['prev_skills'] = tf.stack([temp, episode['prev_skills'][:, :, 2]], axis=-1)
+	
+	else:
+		raise NotImplementedError
+	
+	return episode
+
+
 def run(args):
 	exp_env = get_PnP_env(args)
+	buffer_shape = get_buffer_shape(args)
 	
+	if args.two_object:
+		data_type = f'two_obj_{args.expert_behaviour}_{args.wrap_skill_id}_{args.split_tag}'
+	else:
+		data_type = f'single_obj_{args.split_tag}'
+	data_path = os.path.join(args.dir_data, data_type + '.pkl')
+	env_state_dir = os.path.join(args.dir_data, f'{data_type}_env_states_{args.split_tag}')
+	if not os.path.exists(env_state_dir):
+		os.makedirs(env_state_dir)
+		
 	# ############################################# EXPERT POLICY ############################################# #
 	if args.two_object:
-		expert_policy = PnPExpertTwoObj(exp_env.latent_dim, args.expert_behaviour)
+		num_skills = 5 if args.wrap_skill_id == '2' else 6 if args.wrap_skill_id == '1' else 3
+		buffer_shape['prev_skills'] = (args.horizon, num_skills)
+		buffer_shape['curr_skills'] = (args.horizon, num_skills)
+		# expert_policy = PnPExpertTwoObj(args.expert_behaviour, wrap_skill_id=args.wrap_skill_id)
+		expert_policy = PnPExpertTwoObjImitator(wrap_skill_id=args.wrap_skill_id)
 	else:
-		expert_policy = PnPExpert(exp_env.latent_dim)
+		expert_policy = PnPExpert()
 	
 	# Initiate a worker to generate expert rollouts
 	expert_worker = RolloutWorker(
-		exp_env, expert_policy, T=args.horizon, rollout_terminate=args.rollout_terminate, render=False,
+		exp_env, expert_policy, T=args.horizon, rollout_terminate=args.rollout_terminate, render=args.render,
 		is_expert_worker=True
 	)
-	# ############################################# DATA TRAINING ############################################# #
+	
 	# Load Buffer to store expert data
-	num_train_episodes = int(args.expert_demos * args.perc_train)
-	if num_train_episodes:
-		expert_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon)
-		
-		train_data_path = os.path.join(args.dir_data, '{}_train.pkl'.format(
-			'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
-		env_state_dir = os.path.join(
-			args.dir_data,
-			'{}_env_states_train'.format(
-				'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
-		
-		if not os.path.exists(env_state_dir):
-			os.makedirs(env_state_dir)
-		
-		exp_stats = {'success_rate': 0.}
-		logger.info("Generating {} Expert Demos for training.".format(num_train_episodes))
-		
-		n = 0
-		while n < num_train_episodes:
-			tf.print("Generating Train Episode {}/{}".format(n + 1, num_train_episodes))
-			try:
-				_episode, exp_stats = expert_worker.generate_rollout()
-			except ValueError as e:
-				tf.print("Episode Error! Generating another Episode.")
-				continue
-			
-			if args.two_object:
-				dist = np.linalg.norm(_episode['states'][0][-1][3:9] - _episode['env_goals'][0][-1][:])
-			else:
-				dist = np.linalg.norm(_episode['states'][0][-1][3:6] - _episode['env_goals'][0][-1][:])
-			logger.info(f"({n}/{num_train_episodes}) dist. to goal achieved = {round(dist, 4)}")
-			
-			# Check if episode is successful
-			if tf.math.equal(tf.argmax(_episode['successes'].numpy()[0]), 0):
-				# Check the distance between the goal and the object
-				tf.print("Episode Unsuccessful! Generating another Episode.")
-				continue
-			else:
-				expert_buffer.store_episode(_episode)
-				plot_metrics(
-					[_episode['distances'].numpy()[0]], labels=['|G_env - AG_curr|'],
-					fig_path=os.path.join(args.dir_root_log, 'Expert_{}_{}.png'.format(
-						'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj', n)),
-					y_label='Metrics', x_label='Steps'
-				)
-				path_to_init_state_dict = tf.constant(os.path.join(env_state_dir, 'env_{}.pkl'.format(n)))
-				with open(path_to_init_state_dict.numpy(), 'wb') as handle:
-					pickle.dump(exp_stats['init_state_dict'], handle, protocol=pickle.HIGHEST_PROTOCOL)
-				n += 1
-		
-		expert_buffer.save_buffer_data(train_data_path)
-		logger.info("Saved Expert Demos at {} training.".format(train_data_path))
-		logger.info("Expert Policy Success Rate (Train Data): {}".format(expert_worker.current_success_rate()))
+	expert_buffer = ReplayBufferTf(buffer_shape, args.buffer_size, args.horizon)
 	
-	# ############################################# DATA VALIDATION ############################################# #
-	expert_worker.clear_history()
-	num_val_episodes = args.expert_demos - num_train_episodes
+	# ############################################# Generate DATA ############################################# #
 	
-	if num_val_episodes:
-		val_buffer = ReplayBufferTf(get_buffer_shape(args), args.buffer_size, args.horizon)
+	logger.info("Generating {} Expert Demos for {}".format(args.split_tag, args.expert_demos))
+	
+	n = 0
+	while n < args.expert_demos:
+		tf.print("Generating {} Episode {}/{}".format(args.split_tag, n + 1, args.expert_demos))
 		
-		val_data_path = os.path.join(args.dir_data, '{}_val.pkl'.format(
-			'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
-		env_state_dir = os.path.join(
-			args.dir_data,
-			'{}_env_states_val'.format('two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj'))
+		try:
+			_episode, exp_stats = expert_worker.generate_rollout()
+		except ValueError as e:
+			tf.print("Episode Error! Generating another Episode.")
+			continue
 		
-		if not os.path.exists(env_state_dir):
-			os.makedirs(env_state_dir)
+		if args.two_object:
+			dist = np.linalg.norm(_episode['states'][0][-1][3:9] - _episode['env_goals'][0][-1][:])
+		else:
+			dist = np.linalg.norm(_episode['states'][0][-1][3:6] - _episode['env_goals'][0][-1][:])
 		
-		logger.info("Generating {} Expert Demos for validation.".format(num_val_episodes))
-		exp_stats = {'success_rate': 0.}
+		logger.info(f"({n}/{args.expert_demos}) dist. to goal achieved = {round(dist, 4)}")
 		
-		# Generate and store expert validation data
-		n = 0
-		while n < num_val_episodes:
-			tf.print("Generating Val Episode {}/{}".format(n + 1, num_val_episodes))
-			try:
-				_episode, exp_stats = expert_worker.generate_rollout()
-			except ValueError as e:
-				tf.print("Episode Error! Generating another Episode.")
-				continue
-			
-			if args.two_object:
-				dist = np.linalg.norm(_episode['states'][0][-1][3:9] - _episode['env_goals'][0][-1][:])
-			else:
-				dist = np.linalg.norm(_episode['states'][0][-1][3:6] - _episode['env_goals'][0][-1][:])
-			logger.info(f"({n}/{num_val_episodes}) dist. to goal achieved = {round(dist, 4)}")
-			
-			# Check if episode is successful
-			if tf.math.equal(tf.argmax(_episode['successes'].numpy()[0]), 0):
-				tf.print("Episode Unsuccessful! Generating another Episode.")
-				continue
-			else:
-				val_buffer.store_episode(_episode)
-				path_to_init_state_dict = tf.constant(os.path.join(env_state_dir, 'env_{}.pkl'.format(n)))
-				with open(path_to_init_state_dict.numpy(), 'wb') as handle:
-					pickle.dump(exp_stats['init_state_dict'], handle, protocol=pickle.HIGHEST_PROTOCOL)
-				n += 1
-		
-		val_buffer.save_buffer_data(val_data_path)
-		logger.info("Saved Expert Demos at {} for validation.".format(val_data_path))
-		logger.info("Expert Policy Success Rate (Val Data): {}".format(exp_stats['success_rate']))
+		# Check if episode is successful
+		if tf.math.equal(tf.argmax(_episode['successes'].numpy()[0]), 0):
+			# Check the distance between the goal and the object
+			tf.print("Episode Unsuccessful! Generating another Episode.")
+			continue
+		else:
+			expert_buffer.store_episode(_episode)
+			plot_metrics(
+				[_episode['distances'].numpy()[0]], labels=['|G_env - AG_curr|'],
+				fig_path=os.path.join(args.dir_root_log, 'Expert_{}_{}.png'.format(
+					'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj', n)),
+				y_label='Metrics', x_label='Steps'
+			)
+			path_to_init_state_dict = tf.constant(os.path.join(env_state_dir, 'env_{}.pkl'.format(n)))
+			with open(path_to_init_state_dict.numpy(), 'wb') as handle:
+				pickle.dump(exp_stats['init_state_dict'], handle, protocol=pickle.HIGHEST_PROTOCOL)
+			n += 1
+	
+	expert_buffer.save_buffer_data(data_path)
+	logger.info("Saved Expert Demos at {} training.".format(data_path))
+	logger.info("Expert Policy Success Rate (Train Data): {}".format(expert_worker.current_success_rate()))
 
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--expert_demos', type=int, default=100, help='Use 100 (GOAL GAIL usage)')
-	parser.add_argument('--perc_train', type=int, default=1.0,
-						help='Percentage of expert demos to use for training. Use 0.9')
+	parser.add_argument('--expert_demos', type=int, default=5, help='(GOAL GAIL usage: 10)')
+	parser.add_argument('--split_tag', type=str, default='train')
+	parser.add_argument('--render', type=bool, default=True)
 	
 	# Specify Environment Configuration
 	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
 	parser.add_argument('--full_space_as_goal', type=bool, default=False)
-	parser.add_argument('--two_object', type=bool, default=False)
+	parser.add_argument('--two_object', type=bool, default=True)
 	parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0', '1', '2'],
 						help='Expert behaviour in two_object env')
 	parser.add_argument('--stacking', type=bool, default=False)
@@ -171,12 +146,16 @@ if __name__ == '__main__':
 	parser.add_argument('--fix_object', type=bool, default=False,
 						help='Fix the object position for one object task')
 	
-	parser.add_argument('--horizon', type=int, default=100,
-						help='Set 50 for one_obj, 125 for two_obj:0, two_obj:1 and 150 for two_obj:2')
+	# Specify Rollout Data Configuration
+	parser.add_argument('--horizon', type=int, default=150,
+						help='Set 100 for one_obj, 150 for two_obj:0, two_obj:1 and 150 for two_obj:2')
 	parser.add_argument('--rollout_terminate', type=bool, default=False,
 						help='We retain the success flag=1 for states which satisfy goal condition,')
 	parser.add_argument('--buffer_size', type=int, default=int(1e6),
 						help='--')
+	
+	parser.add_argument('--wrap_skill_id', type=str, default='1', choices=['0', '1', '2'],
+						help='consumed by multi-object expert to determine how to wrap effective skills')
 	
 	parser.add_argument('--dir_root_log', type=str, default=log_dir)
 	parser.add_argument('--dir_data', type=str, default='./pnp_data/study')

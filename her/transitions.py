@@ -9,28 +9,47 @@ import tensorflow_probability as tfp
 logger = logging.getLogger(__name__)
 
 
-def get_segmented_transitions(c_specific_mask: np.ndarray, future_offset_frac: float = None):
+def get_segmented_transitions(c_specific_mask: np.ndarray):
 	t_samples = []
+	past_t = []
 	future_t = []
 	for rollout_id in range(c_specific_mask.shape[0]):
 		t_trg_c = np.where(c_specific_mask[rollout_id] == 1)[0]
 		t_segments = np.split(t_trg_c, np.where(np.diff(t_trg_c) != 1)[0] + 1)
-		t_segments: List = [c for c in t_segments if len(c) > 1]  # remove single element segments
-		t_segment: np.ndarray = random.choice(t_segments)
+		if len(t_segments):
+			min_t_segments: List = [c for c in t_segments if len(c) > 2]  # need at least 3 time steps to sample from
+			if len(min_t_segments) > 0:
+				t_segment: np.ndarray = random.choice(min_t_segments)
+				
+				# Select a time step randomly from the segment except the last one
+				t_curr = random.choice(t_segment[1:-1])
+				t_samples.append(t_curr)
+				
+				# Determine the length of future segment and then the future offset
+				c_t_remaining = t_segment[t_segment > t_curr]
+				rdm_future_offset_frac = random.uniform(0, 1)
+				future_offset = np.floor(rdm_future_offset_frac * len(c_t_remaining)).astype(np.int32)
+				t_future = c_t_remaining[future_offset]
+				future_t.append(t_future)
+				
+				# Determine the length of past segment and then the past offset
+				rdm_past_offset_frac = random.uniform(0, 1)
+				c_t_remaining = t_segment[t_segment < t_curr]
+				past_offset = np.floor(rdm_past_offset_frac * len(c_t_remaining)).astype(np.int32)
+				t_past = c_t_remaining[-past_offset]
+				past_t.append(t_past)
+			else:
+				# Just put the same time step for all
+				t_segment: np.ndarray = random.choice(t_segments)
+				t_curr = random.choice(t_segment)
+				t_samples.append(t_curr)
+				future_t.append(t_curr)
+				past_t.append(t_curr)
+			
+		else:
+			raise ValueError("No segments found for the rollout")
 		
-		# Select a time step randomly from the segment except the last one
-		t_curr = random.choice(t_segment[:-1])
-		t_samples.append(t_curr)
-
-		if future_offset_frac:
-			# Determine the length of remaining segment
-			c_t_remaining = t_segment[t_segment > t_curr]
-			# Determine the length of the future offset
-			future_offset = int(future_offset_frac * len(c_t_remaining))
-			# Select the future offset
-			t_future = c_t_remaining[future_offset]
-			future_t.append(t_future)
-	return np.array(t_samples, dtype=np.int32), np.array(future_t, dtype=np.int32)
+	return np.array(t_samples, dtype=np.int32), np.array(future_t, dtype=np.int32), np.array(past_t, dtype=np.int32)
 
 
 @tf.function(experimental_relax_shapes=True)  # Imp otherwise code will be very slow
@@ -67,9 +86,9 @@ def get_ep_term_idxs(episodic_data, batch_size):
 	return episode_idxs, terminate_idxes
 	
 	
-def sample_transitions(sample_style: str, state_to_goal=None, future_offset_frac: float = None):
+def sample_transitions(sample_style: str, state_to_goal=None, num_options: int = None):
 	
-	def sample_skills_random_transitions(episodic_data, batch_size_in_transitions=None, num_options=3):
+	def sample_skills_random_transitions(episodic_data, batch_size_in_transitions=None):
 		"""
 		Sample transitions for each option
 		"""
@@ -97,14 +116,15 @@ def sample_transitions(sample_style: str, state_to_goal=None, future_offset_frac
 			terminate_idxes = tf.gather(terminate_idxes, episode_idxs)
 			
 			# Get the start and end index for each segment of the episode
-			c = tf.gather(episodic_data['latent_modes'], episode_idxs)
+			c = tf.gather(episodic_data['curr_skills'], episode_idxs)
 			c = tf.argmax(c, axis=-1)
 			t_mask_trg_c = tf.equal(c, i)
 			t_mask_trg_c = tf.cast(t_mask_trg_c, dtype=episode_idxs.dtype)
-			t_samples, t_samples_future = tf.numpy_function(get_segmented_transitions, [t_mask_trg_c, future_offset_frac],
-													Tout=[tf.int32, tf.int32])
+			t_samples, t_samples_future, t_samples_init = tf.numpy_function(get_segmented_transitions, [t_mask_trg_c],
+																			Tout=[tf.int32, tf.int32, tf.int32])
 			t_samples = tf.cast(t_samples, dtype=episode_idxs.dtype)
 			t_samples_future = tf.cast(t_samples_future, dtype=episode_idxs.dtype)
+			t_samples_init = tf.cast(t_samples_init, dtype=episode_idxs.dtype)
 			
 			# --------------- 3) Select the batch of transitions corresponding to the current time steps ------------
 			curr_indices = tf.stack((episode_idxs, t_samples), axis=-1)
@@ -117,6 +137,10 @@ def sample_transitions(sample_style: str, state_to_goal=None, future_offset_frac
 			option_transitions[i]['her_goals'] = state_to_goal(
 				states=tf.gather_nd(episodic_data['states'], indices=future_indices),
 				obj_identifiers=None)
+			
+			# --------------- 5) Select the batch of transitions corresponding to the initial time steps ------------
+			init_indices = tf.stack((episode_idxs, t_samples_init), axis=-1)
+			option_transitions[i]['init_states'] = tf.gather_nd(episodic_data['states'], indices=init_indices)
 		
 		return option_transitions
 	
@@ -137,7 +161,9 @@ def sample_transitions(sample_style: str, state_to_goal=None, future_offset_frac
 		t_samples = tf.cast(tf.round(t_samples), dtype=terminate_idxes.dtype)
 		
 		# Get random init time step (before t_samples)
-		rdm_past_offset_frac = tf.experimental.numpy.random.random(size=(batch_size,))
+		# rdm_past_offset_frac = tf.experimental.numpy.random.random(size=(batch_size,))
+		# Instead rdm_past_offset_frac should be 0
+		rdm_past_offset_frac = tf.zeros_like(t_samples_frac)
 		t_samples_init = rdm_past_offset_frac * tf.cast(t_samples, dtype=rdm_past_offset_frac.dtype)
 		t_samples_init = tf.cast(tf.floor(t_samples_init), dtype=t_samples.dtype)
 		
