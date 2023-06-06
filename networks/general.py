@@ -1,7 +1,5 @@
-from typing import Tuple
-
 import tensorflow as tf
-from keras.layers import Dense, Flatten
+from keras.layers import Dense
 from utils.sample import gumbel_softmax_tf
 import tensorflow_probability as tfp
 import numpy as np
@@ -135,26 +133,37 @@ class Actor(tf.keras.Model):
             Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
             Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
             Dense(units=128, activation=tf.nn.relu, kernel_initializer='he_normal'),
-            Dense(units=2 * action_dim, kernel_initializer='he_normal')
+            Dense(units=action_dim, kernel_initializer='he_normal')
         ])
         self.MEAN_MIN, self.MEAN_MAX = -7, 7
-        self.LOG_STD_MIN, self.LOG_STD_MAX = -5, 2
+        # self.LOG_STD_MIN, self.LOG_STD_MAX = -5, 2
         self.eps = np.finfo(np.float32).eps
+        self.pi = tf.constant(np.pi)
+        self.FIXED_STD = 0.05
         
         self.train = True
     
-    def get_dist_and_mode(self, states):
-        out = self.base(states)
-        mu, log_std = tf.split(out, num_or_size_splits=2, axis=1)
-        
-        mu = tf.clip_by_value(mu, self.MEAN_MIN, self.MEAN_MAX)
-        log_std = tf.clip_by_value(log_std, self.LOG_STD_MIN, self.LOG_STD_MAX)
-        std = tf.exp(log_std)
-
-        pretanh_action_dist = tfp.distributions.MultivariateNormalDiag(mu, std)
-        return pretanh_action_dist, mu
+    # def get_dist_and_mode(self, states):
+    #     out = self.base(states)
+    #     mu, log_std = tf.split(out, num_or_size_splits=2, axis=1)
+    #     mu, log_std = tf.nn.tanh(mu), tf.nn.tanh(log_std)
+    #     mu = tf.clip_by_value(mu, self.MEAN_MIN, self.MEAN_MAX)
+    #     log_std = tf.clip_by_value(log_std, self.LOG_STD_MIN, self.LOG_STD_MAX)
+    #     std = tf.exp(log_std)
+    #
+    #     # log_std = self.LOG_STD_MIN + 0.5 * (self.LOG_STD_MAX - self.LOG_STD_MIN) * (log_std + 1)
+    #     #
+    #     # dist = tfp.distributions.TransformedDistribution(
+    #     #     tfp.distributions.Sample(tfp.distributions.Normal(tf.zeros(mu.shape[:-1]), 1.0),
+    #     #                              sample_shape=mu.shape[-1:]),
+    #     #     tfp.bijectors.Chain([
+    #     #         tfp.bijectors.Tanh(),
+    #     #         tfp.bijectors.Shift(shift=mu),
+    #     #         tfp.bijectors.ScaleMatvecDiag(scale_diag=std)])
+    #     # )
+    #
+    #     return mu, std
     
-    @tf.function
     def get_log_prob(self, states, actions):
         """Evaluate log probs for actions conditioned on states.
         Args:
@@ -163,34 +172,51 @@ class Actor(tf.keras.Model):
         Returns:
           Log probabilities of actions.
         """
-        pretanh_action_dist, _ = self.get_dist_and_mode(states)
-
-        pretanh_actions = tf.atanh(tf.clip_by_value(actions, -1 + self.eps, 1 - self.eps))
-        pretanh_log_probs = pretanh_action_dist.log_prob(pretanh_actions)
-
-        log_probs = pretanh_log_probs - tf.reduce_sum(tf.math.log(1 - actions ** 2 + self.eps), axis=-1)
+        mu = self.base(states)
+        mu = tf.nn.tanh(mu)
+        mu = tf.clip_by_value(mu, self.MEAN_MIN, self.MEAN_MAX)
+        
+        std = tf.ones_like(mu) * self.FIXED_STD
+        
+        actions = tf.clip_by_value(actions, -1 + self.eps, 1 - self.eps)
+        
+        # Get log probs from Gaussian distribution
+        log_probs = -0.5 * tf.square((actions - mu) / std) - 0.5 * tf.math.log(2 * self.pi) - tf.math.log(std)
+        log_probs = tf.reduce_sum(log_probs, axis=1, keepdims=False)
+        
         return log_probs
     
-    @tf.function
-    def call(self, states):
+    
+    def call(self, states, training=None, mask=None):
         """Computes actions for given inputs.
         Args:
           states: A batch of states.
+          training: Ignored
+          mask: Ignored.
         Returns:
           A mode action, a sampled action and log probability of the sampled action.
         """
-        pretanh_action_dist, mode = self.get_dist_and_mode(states)
+        mu = self.base(states)
+        mu = tf.nn.tanh(mu)
+        mu = tf.clip_by_value(mu, self.MEAN_MIN, self.MEAN_MAX)
         
-        # Sample actions from the distribution
-        pretanh_actions = pretanh_action_dist.sample()
-        actions = tf.tanh(pretanh_actions)
-        
+        if self.train:
+            # Sample actions from the distribution
+            actions = tf.random.normal(shape=mu.shape, mean=mu, stddev=self.FIXED_STD)
+        else:
+            actions = mu
+            
         # Compute log probs
-        pretanh_log_probs = pretanh_action_dist.log_prob(pretanh_actions)
-        log_probs = pretanh_log_probs - tf.reduce_sum(tf.math.log(1 - actions ** 2 + self.eps), axis=-1)
+        log_probs = self.get_log_prob(states, actions)
+        # # Sample actions from the distribution
+        # actions = dist.sample()
+        #
+        # # Compute log probs
+        # log_probs = dist.log_prob(actions)
         log_probs = tf.expand_dims(log_probs, -1)  # To avoid broadcasting
         
-        return tf.tanh(mode), actions, log_probs
+        actions = tf.clip_by_value(actions, -1 + self.eps, 1 - self.eps)
+        return mu, actions, log_probs
 
 
 class Director(tf.keras.Model):
@@ -210,7 +236,6 @@ class Director(tf.keras.Model):
         logits = self.base(states)
         return logits
     
-    @tf.function
     def get_log_prob(self, states, curr_skills=None):
         """Evaluate log probs for current skill conditioned on states.
         Args:
@@ -227,11 +252,13 @@ class Director(tf.keras.Model):
             
         return log_probs
     
-    @tf.function
-    def call(self, states):
+    def call(self, states, training=None, mask=None):
         """Computes skills for given inputs.
         Args:
           states: A batch of states.
+          training: Ignored
+          mask: Ignored.
+          
         Returns:
              (1) skill probability distribution i.e. softmax of logits,
              (2) a sampled skill using Gumbel-Softmax trick and multinomial sampling,
@@ -255,21 +282,28 @@ class Director(tf.keras.Model):
         
         
 class SkilledActors(tf.keras.Model):
-    def __init__(self, action_dim: int, skill_dim: int):
+    def __init__(self, a_dim: int, c_dim: int):
         super(SkilledActors, self).__init__()
         
-        self.action_dim = action_dim
-        self.skill_dim = skill_dim
+        self.action_dim = a_dim
+        self.skill_dim = c_dim
         
         # For each skill, we have a separate actor
-        self.actors = [Actor(action_dim) for _ in range(skill_dim)]
+        self.actors = [Actor(a_dim) for _ in range(c_dim)]
         
         # Have a skill predictor for each skill (we call them directors)
-        self.directors = [Director(skill_dim) for _ in range(skill_dim)]
+        self.directors = [Director(c_dim) for _ in range(c_dim)]
         
-        self.MEAN_MIN, self.MEAN_MAX = -7, 7
-        self.LOG_STD_MIN, self.LOG_STD_MAX = -5, 2
-        self.eps = np.finfo(np.float32).eps
+        # Target Actors and Directors (Only for evaluation purposes)
+        self.target_actors = [Actor(a_dim) for _ in range(c_dim)]
+        self.target_directors = [Director(c_dim) for _ in range(c_dim)]
+        
+        # Set the trainable variables of reference networks to be non-trainable
+        for trg_actor in self.target_actors:
+            trg_actor.trainable = False
+        for trg_director in self.target_directors:
+            trg_director.trainable = False
+        
         
     def get_variables(self):
         # Function to get variables of all the networks
@@ -286,17 +320,18 @@ class SkilledActors(tf.keras.Model):
         for skill_predictor in self.directors:
             skill_predictor.train = training_mode
 
-    @tf.function
-    def get_actor_log_probs(self, states, curr_skills=None, actions=None):
+    def get_actor_log_probs(self, states, curr_skills=None, actions=None, use_ref=False):
         """Computes log probabilities of actions for given inputs.
             Args:
               states: A batch of current states.
               curr_skills: A batch of current skills.
               actions: A batch of actions.
+              use_ref: A boolean indicating whether to use reference networks or not.
             Returns:
               A batch of log probabilities of the actions.
         """
-        op = [actor.get_log_prob(states, actions) for actor in self.actors]
+        actors = self.target_actors if use_ref else self.actors
+        op = [actor.get_log_prob(states, actions) for actor in actors]
         log_probs = tf.stack(op, axis=1)  # (batch_size, skill_dim, 1)
         if curr_skills is not None:
             log_probs = tf.reduce_sum(log_probs * curr_skills, axis=1)
@@ -304,7 +339,6 @@ class SkilledActors(tf.keras.Model):
         log_probs = tf.expand_dims(log_probs, -1)  # To avoid broadcasting
         return log_probs
     
-    @tf.function
     def call_actor(self, states, curr_skills=None):
         """Computes actions for given states.
         Args:
@@ -332,17 +366,18 @@ class SkilledActors(tf.keras.Model):
         
         return modes, actions, log_probs
 
-    @tf.function
-    def get_director_log_probs(self, states, prev_skills=None, curr_skills=None):
+    def get_director_log_probs(self, states, prev_skills=None, curr_skills=None, use_ref=False):
         """Computes log probabilities of next skills for given inputs.
             Args:
               states: A batch of current states.
               prev_skills: A batch of previous skills.
               curr_skills: A batch of current skills.
+              use_ref: A boolean indicating whether to use reference networks or not.
             Returns:
               A batch of log probabilities of the next skills.
         """
-        op = [director.get_log_prob(states, curr_skills) for director in self.directors]
+        directors = self.target_directors if use_ref else self.directors
+        op = [director.get_log_prob(states, curr_skills) for director in directors]
         log_probs = tf.stack(op, axis=1)  # (batch_size, prev_skill_dim) or (batch_size, prev_skill_dim, curr_skill_dim)
         if prev_skills is not None:
             
@@ -357,7 +392,6 @@ class SkilledActors(tf.keras.Model):
                 log_probs = tf.reduce_sum(log_probs, axis=1)  # (batch_size, curr_skill_dim)
         return log_probs
 
-    @tf.function
     def call_director(self, states, prev_skills=None):
         """Directs skills for given states.
         Args:
@@ -418,8 +452,7 @@ class SkilledActors(tf.keras.Model):
             
         return path, log_prob_traj
     
-    @tf.function
-    def viterbi_decode(self, states, actions, init_skill):
+    def viterbi_decode(self, states, actions, init_skill, use_ref=False):
         """
         Computes the Viterbi path for the given
         > states (T x s_dim),
@@ -427,9 +460,9 @@ class SkilledActors(tf.keras.Model):
         > init_skill (skill_dim,) one-hot vector
         """
         
-        log_pis = self.get_actor_log_probs(states, None, actions)  # T x (curr)skill_dim x 1
+        log_pis = self.get_actor_log_probs(states, None, actions, use_ref)  # T x (curr)skill_dim x 1
         log_pis = tf.reshape(log_pis, (states.shape[0], 1, self.skill_dim))  # T x 1 x (curr)skill_dim
-        log_trs = self.get_director_log_probs(states, None, None)  # T x (prev)skill_dim x (curr)skill_dim
+        log_trs = self.get_director_log_probs(states, None, None, use_ref)  # T x (prev)skill_dim x (curr)skill_dim
         log_probs = log_pis + log_trs  # T x (prev)skill_dim x (curr)skill_dim
         
         path, log_prob_traj = tf.numpy_function(self.compute_max_path_viterbi,
@@ -437,39 +470,34 @@ class SkilledActors(tf.keras.Model):
                                                 [tf.int32, tf.float32])
         
         return path, log_prob_traj
-    
-    
-class oldActor(tf.keras.Model):
+
+
+class preTanhActor(tf.keras.Model):
     def __init__(self, action_dim):
-        super(oldActor, self).__init__()
+        super(preTanhActor, self).__init__()
         self.base = tf.keras.Sequential([
-            Dense(units=256, activation=tf.nn.relu, kernel_initializer='orthogonal'),
-            Dense(units=256, activation=tf.nn.relu, kernel_initializer='orthogonal'),
-            Dense(units=128, activation=tf.nn.relu, kernel_initializer='orthogonal'),
-            Dense(units=2 * action_dim, kernel_initializer='orthogonal')
-            ])
+            Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
+            Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
+            Dense(units=128, activation=tf.nn.relu, kernel_initializer='he_normal'),
+            Dense(units=2 * action_dim, kernel_initializer='he_normal')
+        ])
         self.MEAN_MIN, self.MEAN_MAX = -7, 7
         self.LOG_STD_MIN, self.LOG_STD_MAX = -5, 2
+        self.eps = np.finfo(np.float32).eps
         
+        self.train = True
+    
     def get_dist_and_mode(self, states):
         out = self.base(states)
         mu, log_std = tf.split(out, num_or_size_splits=2, axis=1)
         
-        mu, log_std = tf.nn.tanh(mu), tf.nn.tanh(log_std)
-        log_std = self.LOG_STD_MIN + 0.5 * (self.LOG_STD_MAX - self.LOG_STD_MIN) * (log_std + 1)
+        mu = tf.clip_by_value(mu, self.MEAN_MIN, self.MEAN_MAX)
+        log_std = tf.clip_by_value(log_std, self.LOG_STD_MIN, self.LOG_STD_MAX)
         std = tf.exp(log_std)
         
-        dist = tfp.distributions.TransformedDistribution(
-            tfp.distributions.Sample(tfp.distributions.Normal(tf.zeros(mu.shape[:-1]), 1.0), sample_shape=mu.shape[-1:]),
-            tfp.bijectors.Chain([
-                tfp.bijectors.Tanh(),
-                tfp.bijectors.Shift(shift=mu),
-                tfp.bijectors.ScaleMatvecDiag(scale_diag=std)])
-            )
-        
-        return dist, mu
-
-    @tf.function
+        pretanh_action_dist = tfp.distributions.MultivariateNormalDiag(mu, std)
+        return pretanh_action_dist, mu
+    
     def get_log_prob(self, states, actions):
         """Evaluate log probs for actions conditioned on states.
         Args:
@@ -478,22 +506,42 @@ class oldActor(tf.keras.Model):
         Returns:
           Log probabilities of actions.
         """
-        dist, _ = self.get_dist_and_mode(states)
-        log_probs = dist.log_prob(actions)
-        log_probs = tf.expand_dims(log_probs, -1)  # To avoid broadcasting
+        pretanh_action_dist, _ = self.get_dist_and_mode(states)
+        
+        pretanh_actions = tf.atanh(tf.clip_by_value(actions, -1 + self.eps, 1 - self.eps))
+        pretanh_log_probs = pretanh_action_dist.log_prob(pretanh_actions)
+        
+        log_probs = pretanh_log_probs - tf.reduce_sum(tf.math.log(1 - actions ** 2 + self.eps), axis=-1)
         return log_probs
-
-    @tf.function
-    def call(self, states):
+    
+    def call(self, states, training=None, mask=None):
         """Computes actions for given inputs.
         Args:
           states: A batch of states.
+          training: Ignored
+          mask: Ignored.
         Returns:
           A mode action, a sampled action and log probability of the sampled action.
         """
-        dist, mode = self.get_dist_and_mode(states)
-        samples = dist.sample()
-        log_probs = dist.log_prob(samples)
-        log_probs = tf.expand_dims(log_probs, -1)  # To avoid broadcasting
-        return mode, samples, log_probs
+        pretanh_action_dist, mode = self.get_dist_and_mode(states)
         
+        if self.train:
+            # Sample actions from the distribution
+            pretanh_actions = pretanh_action_dist.sample()
+            actions = tf.tanh(pretanh_actions)
+            
+            # Compute log probs
+            pretanh_log_probs = pretanh_action_dist.log_prob(pretanh_actions)
+            log_probs = pretanh_log_probs - tf.reduce_sum(tf.math.log(1 - actions ** 2 + self.eps), axis=-1)
+        
+        else:
+            actions = tf.tanh(mode)
+            
+            # Compute log probs
+            pretanh_log_probs = pretanh_action_dist.log_prob(
+                tf.atanh(tf.clip_by_value(actions, -1 + self.eps, 1 - self.eps)))
+            log_probs = pretanh_log_probs - tf.reduce_sum(tf.math.log(1 - actions ** 2 + self.eps), axis=-1)
+        
+        log_probs = tf.expand_dims(log_probs, -1)  # To avoid broadcasting
+        
+        return tf.tanh(mode), actions, log_probs

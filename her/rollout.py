@@ -79,23 +79,20 @@ class RolloutWorker:
 		distances = tf.TensorArray(dtype=tf.float32, size=0, dynamic_size=True)
 		
 		# Initialize the environment
-		if reset:
-			curr_state, _, g_env = self.reset_rollout()  # Get s_0 and g_env
-			init_state_dict = self.env.get_state_dict()
-		
-		else:
-			
-			if resume_state_dict is None:
-				raise ValueError("resume_state_dict cannot be None if reset=False")
-			
+		if resume_state_dict is not None:
 			try:
-			
 				curr_state, _, g_env = self.force_reset_rollout(resume_state_dict)
 				init_state_dict = resume_state_dict
-			
 			except MujocoException as _:
 				logging.error("Some Error occurred while loading initial state in the environment!")
 				sys.exit(-1)
+			
+		else:
+			if not reset:
+				raise ValueError("reset can not be False if resume_state_dict is None!")
+			
+			curr_state, _, g_env = self.reset_rollout()  # Get s_0 and g_env
+			init_state_dict = self.env.get_state_dict()
 
 		# For Expert, reset its policy to reset its internal state
 		if self.is_expert_worker:

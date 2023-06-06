@@ -9,7 +9,7 @@ import numpy as np
 from typing import Dict
 from utils.env import get_PnP_env
 from utils.buffer import get_buffer_shape
-from domains.PnPExpert import PnPExpert, PnPExpertTwoObj, PnPExpertTwoObjImitator
+from domains.PnPExpert import PnPExpertOneObjImitator, PnPExpertTwoObjImitator, PnPExpertMultiObjImitator
 from her.rollout import RolloutWorker
 from her.replay_buffer import ReplayBufferTf
 from utils.plot import plot_metrics
@@ -31,7 +31,7 @@ logging.basicConfig(filename=os.path.join(log_dir, 'logs.txt'), filemode='w',
 logger = logging.getLogger(__name__)
 
 
-def merge_pick_drop(args, episode: Dict[str, tf.Tensor]):
+def merge_pick_grab(args, episode: Dict[str, tf.Tensor]):
 	# Each Tensor in episode is of shape (num_episodes, horizon, dim)
 	# Merge pick and drop into one skill and retain drop
 	
@@ -53,25 +53,32 @@ def merge_pick_drop(args, episode: Dict[str, tf.Tensor]):
 def run(args):
 	exp_env = get_PnP_env(args)
 	buffer_shape = get_buffer_shape(args)
+	num_objs = int(args.num_objs)
 	
-	if args.two_object:
+	if num_objs == 3:
+		data_type = f'three_obj_{args.expert_behaviour}_{args.wrap_skill_id}_{args.split_tag}'
+	elif num_objs == 2:
 		data_type = f'two_obj_{args.expert_behaviour}_{args.wrap_skill_id}_{args.split_tag}'
-	else:
+	elif num_objs == 1:
 		data_type = f'single_obj_{args.split_tag}'
+	
 	data_path = os.path.join(args.dir_data, data_type + '.pkl')
-	env_state_dir = os.path.join(args.dir_data, f'{data_type}_env_states_{args.split_tag}')
+	env_state_dir = os.path.join(args.dir_data, f'{data_type}_env_states')
 	if not os.path.exists(env_state_dir):
 		os.makedirs(env_state_dir)
 		
 	# ############################################# EXPERT POLICY ############################################# #
-	if args.two_object:
-		num_skills = 5 if args.wrap_skill_id == '2' else 6 if args.wrap_skill_id == '1' else 3
-		buffer_shape['prev_skills'] = (args.horizon, num_skills)
-		buffer_shape['curr_skills'] = (args.horizon, num_skills)
-		# expert_policy = PnPExpertTwoObj(args.expert_behaviour, wrap_skill_id=args.wrap_skill_id)
-		expert_policy = PnPExpertTwoObjImitator(wrap_skill_id=args.wrap_skill_id)
+	num_skills = args.num_objs * 3
+	buffer_shape['prev_skills'] = (args.horizon, num_skills)
+	buffer_shape['curr_skills'] = (args.horizon, num_skills)
+	if num_objs >= 3:
+		expert_policy = PnPExpertMultiObjImitator(args)
+	elif num_objs == 2:
+		expert_policy = PnPExpertTwoObjImitator(args)
+	elif num_objs == 1:
+		expert_policy = PnPExpertOneObjImitator(args)
 	else:
-		expert_policy = PnPExpert()
+		raise NotImplementedError
 	
 	# Initiate a worker to generate expert rollouts
 	expert_worker = RolloutWorker(
@@ -84,27 +91,23 @@ def run(args):
 	
 	# ############################################# Generate DATA ############################################# #
 	
-	logger.info("Generating {} Expert Demos for {}".format(args.split_tag, args.expert_demos))
+	logger.info("Generating {} Expert Demos for {}".format(args.split_tag, args.num_demos))
 	
 	n = 0
-	while n < args.expert_demos:
-		tf.print("Generating {} Episode {}/{}".format(args.split_tag, n + 1, args.expert_demos))
-		
+	while n < args.num_demos:
+		tf.print("Generating {} Episode {}/{}".format(args.split_tag, n + 1, args.num_demos))
 		try:
-			_episode, exp_stats = expert_worker.generate_rollout()
+			_episode, exp_stats = expert_worker.generate_rollout(epsilon=args.random_eps, stddev=args.noise_eps)
 		except ValueError as e:
 			tf.print("Episode Error! Generating another Episode.")
 			continue
 		
-		if args.two_object:
-			dist = np.linalg.norm(_episode['states'][0][-1][3:9] - _episode['env_goals'][0][-1][:])
-		else:
-			dist = np.linalg.norm(_episode['states'][0][-1][3:6] - _episode['env_goals'][0][-1][:])
-		
-		logger.info(f"({n}/{args.expert_demos}) dist. to goal achieved = {round(dist, 4)}")
+		dist = np.linalg.norm(_episode['states'][0][-1][3:3+3*num_objs] - _episode['env_goals'][0][-1][:])
+		logger.info(f"({n}/{args.num_demos}) dist. to goal achieved = {round(dist, 4)}")
 		
 		# Check if episode is successful
-		if tf.math.equal(tf.argmax(_episode['successes'].numpy()[0]), 0):
+		if tf.math.equal(tf.argmax(_episode['successes'].numpy()[0]), 0) \
+				and args.random_eps == 0.0 and args.noise_eps == 0.0:  # If No noise or randomization
 			# Check the distance between the goal and the object
 			tf.print("Episode Unsuccessful! Generating another Episode.")
 			continue
@@ -112,8 +115,7 @@ def run(args):
 			expert_buffer.store_episode(_episode)
 			plot_metrics(
 				[_episode['distances'].numpy()[0]], labels=['|G_env - AG_curr|'],
-				fig_path=os.path.join(args.dir_root_log, 'Expert_{}_{}.png'.format(
-					'two_obj_{}'.format(args.expert_behaviour) if args.two_object else 'single_obj', n)),
+				fig_path=os.path.join(args.dir_root_log, 'Expert_{}_{}.png'.format(data_type, n)),
 				y_label='Metrics', x_label='Steps'
 			)
 			path_to_init_state_dict = tf.constant(os.path.join(env_state_dir, 'env_{}.pkl'.format(n)))
@@ -123,36 +125,40 @@ def run(args):
 	
 	expert_buffer.save_buffer_data(data_path)
 	logger.info("Saved Expert Demos at {} training.".format(data_path))
-	logger.info("Expert Policy Success Rate (Train Data): {}".format(expert_worker.current_success_rate()))
+	logger.info("Expert Policy Success Rate: {}".format(expert_worker.current_success_rate()))
+	tf.print("Expert Policy Success Rate: {}".format(expert_worker.current_success_rate()))
 
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--expert_demos', type=int, default=5, help='(GOAL GAIL usage: 10)')
+	parser.add_argument('--num_demos', type=int, default=2)
 	parser.add_argument('--split_tag', type=str, default='train')
 	parser.add_argument('--render', type=bool, default=True)
 	
 	# Specify Environment Configuration
 	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
 	parser.add_argument('--full_space_as_goal', type=bool, default=False)
-	parser.add_argument('--two_object', type=bool, default=True)
-	parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0', '1', '2'],
-						help='Expert behaviour in two_object env')
-	parser.add_argument('--stacking', type=bool, default=False)
-	parser.add_argument('--target_in_the_air', type=bool, default=False,
-						help='Is only valid in two object task')
+	parser.add_argument('--num_objs', type=int, default=3)
+	parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0', '1'],
+						help='Expert behaviour in multi-obj env. Note that 1 is the randomised behaviour which '
+							 'wont work in the stacking env because goals are suspended in the air and reaching them '
+							 'is impossible without stacking objects below. FIX: order of goal for the objects should '
+							 'be implemented in the env first, which then must be observed by the agent.')
+	parser.add_argument('--stacking', type=bool, default=True)
 	parser.add_argument('--fix_goal', type=bool, default=False,
-						help='Fix the goal position for one object task')
+						help='[Debug] Fix the goal position for one object task')
 	parser.add_argument('--fix_object', type=bool, default=False,
-						help='Fix the object position for one object task')
+						help='[Debug] Fix the object position for one object task')
 	
 	# Specify Rollout Data Configuration
-	parser.add_argument('--horizon', type=int, default=150,
-						help='Set 100 for one_obj, 150 for two_obj:0, two_obj:1 and 150 for two_obj:2')
+	parser.add_argument('--horizon', type=int, default=200,
+						help='Set 100 for one_obj, 150 for two_obj and 200 for three_obj')
 	parser.add_argument('--rollout_terminate', type=bool, default=False,
 						help='We retain the success flag=1 for states which satisfy goal condition,')
 	parser.add_argument('--buffer_size', type=int, default=int(1e6),
 						help='--')
+	parser.add_argument('--random_eps', type=float, default=0.0, help='random eps = 0.05')
+	parser.add_argument('--noise_eps', type=float, default=0.0, help='noise eps = 0.01')
 	
 	parser.add_argument('--wrap_skill_id', type=str, default='1', choices=['0', '1', '2'],
 						help='consumed by multi-object expert to determine how to wrap effective skills')
@@ -162,7 +168,7 @@ if __name__ == '__main__':
 	_args = parser.parse_args()
 	
 	# Load the environment config
-	_args = get_config_env(_args)
+	_args = get_config_env(_args, ag_in_env_goal=True)
 	
 	logger.info("---------------------------------------------------------------------------------------------")
 	config: dict = vars(_args)

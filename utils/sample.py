@@ -31,12 +31,18 @@ def sample_gumbel_tf(shape, eps=1e-10):
     return -tf.math.log(-tf.math.log(U + eps) + eps)
 
 
-def gumbel_softmax_tf(logits, temperature=1, is_prob=False, eps=1e-10):
+def gumbel_softmax_tf(logits, temperature=1, is_prob=False, eps=1e-10, hard=False):
     """ Draw a sample from the Gumbel-Softmax distribution"""
     if is_prob:
         logits = tf.math.log(logits + eps)
     y = logits + sample_gumbel_tf(tf.shape(logits))
-    return tf.nn.softmax(y/temperature, axis=-1)
+    y = tf.nn.softmax(y/temperature, axis=-1)
+    if hard:
+        k = tf.shape(logits)[-1]
+        y_hard = tf.cast(tf.one_hot(tf.argmax(y, axis=-1), k), y.dtype)
+        y = tf.stop_gradient(y_hard - y) + y
+    return y
+
 
 
 def sample_normal_np(mu, std, latent_dim):

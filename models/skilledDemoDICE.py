@@ -1,5 +1,6 @@
 import copy
 import logging
+import time
 from abc import ABC
 from argparse import Namespace
 
@@ -8,7 +9,7 @@ import tensorflow as tf
 from tensorflow_gan.python.losses import losses_impl as tfgan_losses
 from tqdm import tqdm
 
-from domains.PnPExpert import PnPExpert, PnPExpertTwoObj, PnPExpertTwoObjImitator
+from utils.env import get_expert
 from her.replay_buffer import ReplayBufferTf
 from networks.general import SkilledActors, Critic, Discriminator
 from .Base import AgentBase
@@ -30,6 +31,10 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 		self.critic = Critic()
 		self.disc = Discriminator()
 		
+		# Define Target Networks [Target Actors and Directors are already defined in SkilledActors]
+		self.critic_target = Critic()
+		self.critic_target.trainable = False
+		
 		# Define Optimizers
 		self.actor_optimizer = tf.keras.optimizers.Adam(learning_rate=args.actor_lr)
 		self.critic_optimizer = tf.keras.optimizers.Adam(learning_rate=args.critic_lr)
@@ -39,11 +44,7 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 		
 		self.act_w_expert_skill = False
 		self.act_w_expert_action = False
-		if args.two_object:
-			# self.expert = PnPExpertTwoObj(expert_behaviour=args.expert_behaviour, wrap_skill_id=args.wrap_skill_id)
-			self.expert = PnPExpertTwoObjImitator(wrap_skill_id=args.wrap_skill_id)
-		else:
-			self.expert = PnPExpert()
+		self.expert = get_expert(args.num_objs, args)
 		
 		# For HER
 		self.use_her = False
@@ -120,7 +121,9 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 			nu_loss_w_pen = nu_loss + self.args.nu_grad_penalty_coeff * nu_grad_penalty
 			
 			# Compute Actor and Director Loss : Weighted BC Loss with the Advantage function
-			weight = tf.expand_dims(tf.math.exp(rb_adv / (1 + self.args.replay_regularization)), 1)
+			weight = tf.math.exp(rb_adv / (1 + self.args.replay_regularization))
+			weight = tf.reshape(weight, (-1, 1))
+			weight = tf.expand_dims(weight, -1)
 			weight = weight / tf.reduce_mean(weight)  # Normalise weight using self-normalised importance sampling
 
 			# Compute the log probs of current skill using the director
@@ -165,6 +168,7 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 			'avg/rb_adv': tf.reduce_mean(rb_adv),
 		}
 	
+	@tf.function(experimental_relax_shapes=True)
 	def pretrain(self, data_exp):
 		with tf.GradientTape(watch_accessed_variables=False, persistent=True) as tape:
 			tape.watch(self.skilled_actors.variables)
@@ -175,6 +179,7 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 				data_exp['prev_skills'],
 				data_exp['curr_skills']
 			)
+			loss_directors = - tf.reduce_mean(curr_skill_log_prob)
 			
 			# Compute the log probs of current action using the actor
 			curr_action_log_prob = self.skilled_actors.get_actor_log_probs(
@@ -182,15 +187,28 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 				data_exp['curr_skills'],
 				data_exp['actions']
 			)
+			loss_actors = - tf.reduce_mean(curr_action_log_prob)
 			
-			total_loss = - tf.reduce_mean(curr_skill_log_prob + curr_action_log_prob)
+			total_loss = loss_directors + loss_actors
+			
+			# [For Debugging], extract log_prob for actions corresponding to each curr skill
+			per_skill_loss = {}
+			for c in range(self.args.c_dim):
+				t = tf.where(tf.equal(tf.argmax(data_exp['curr_skills'], axis=-1), c))
+				per_skill_loss[f'loss/skill{c}'] = - tf.reduce_mean(tf.gather(curr_action_log_prob, t))
+			
 			
 		grads = tape.gradient(total_loss, self.skilled_actors.variables)
 		self.actor_optimizer.apply_gradients(zip(grads, self.skilled_actors.variables))
 		
-		return {
+		loss_dict = {
 			'loss/pi': total_loss,
+			'loss/actors': loss_actors,
+			'loss/directors': loss_directors
 		}
+		loss_dict.update(per_skill_loss)
+		
+		return loss_dict
 	
 	@tf.function(experimental_relax_shapes=True)  # This is needed to avoid shape errors
 	def act(self, state, env_goal, prev_goal, prev_skill, epsilon, stddev):
@@ -198,7 +216,7 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 		env_goal = tf.clip_by_value(env_goal, -self.args.clip_obs, self.args.clip_obs)
 		prev_goal = tf.clip_by_value(prev_goal, -self.args.clip_obs, self.args.clip_obs)
 		
-		# ###################################### Current Goal ###################################### #
+		# ###################################### Current Goal ####################################### #
 		curr_goal = env_goal
 		
 		# ###################################### Current Skill ###################################### #
@@ -209,7 +227,7 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 			# Get the director corresponding to the previous skill and obtain the current skill
 			_, curr_skill, _ = self.skilled_actors.call_director(tf.concat([state, curr_goal], axis=1), prev_skill)
 		
-		# ###################################### Action ###################################### #
+		# ########################################## Action ######################################### #
 		# Explore
 		if tf.random.uniform(()) < epsilon:
 			action = tf.random.uniform((1, self.args.a_dim), -self.args.action_max, self.args.action_max)
@@ -223,7 +241,7 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 			action = action_mu + action_dev
 			
 			if self.act_w_expert_action:
-				action = tf.numpy_function(self.expert.sample_action, [state[0], env_goal[0], prev_skill[0], action[0]], tf.float32)
+				action = tf.numpy_function(self.expert.sample_action, [state[0], env_goal[0], curr_skill[0], action[0]], tf.float32)
 				action = tf.expand_dims(action, axis=0)
 			
 			action = tf.clip_by_value(action, -self.args.action_max, self.args.action_max)
@@ -295,15 +313,36 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 		return np.cast[np.float32](curr_skill)
 	
 	def get_init_skill(self):
-		if self.args.wrap_skill_id == '0':
-			skill = tf.one_hot(0, self.args.c_dim, dtype=tf.float32)  # Can only be used with expert_behaviour = 0
-			skill = tf.reshape(skill, shape=(1, -1))
-		elif self.args.wrap_skill_id == '1':
-			# TODO: Must learn from expert data when expert_behaviour = 1
-			skill = tf.one_hot(0, self.args.c_dim, dtype=tf.float32)  # Pick Object 0 first (default)
-			skill = tf.reshape(skill, shape=(1, -1))
+		"""
+		One-Obj: Pick Object 0 i.e. [1, 0, 0]
+		Two-Obj: Pick Object 0 i.e. [1, 0, 0, 0, 0, 0] if expert_behaviour = 0
+		Two-Obj: Pick Object 0 i.e. [1, 0, 0, 0, 0, 0] or [0, 0, 0, 1, 0, 0] if expert_behaviour = 1
+		Three-Obj with stacking: Pick Object 0 i.e. [1, 0, 0, 0, 0, 0, 0, 0, 0]
+		"""
+		if self.args.num_objs == 1:
+			skill = tf.one_hot(0, self.args.c_dim, dtype=tf.float32)
+		
+		elif self.args.num_objs == 2:
+			if self.args.expert_behaviour == 0:
+				skill = tf.one_hot(0, self.args.c_dim, dtype=tf.float32)  # Pick Object 0 first (default)
+			#
+			# elif self.args.expert_behaviour == 1:
+			#
+			# 	if tf.random.uniform(shape=()) < 0.5:
+			# 		skill = tf.one_hot(0, self.args.c_dim, dtype=tf.float32)
+			# 	else:
+			# 		skill = tf.one_hot(3, self.args.c_dim, dtype=tf.float32)
+			
+			else:
+				raise ValueError("Invalid expert behaviour to determine init skill in two-object environment: " + str(self.args.expert_behaviour))
+		
+		elif self.args.num_objs == 3:
+			skill = tf.one_hot(0, self.args.c_dim, dtype=tf.float32)
+			
 		else:
-			raise NotImplementedError
+			raise ValueError("Invalid number of objects: " + str(self.args.num_objs))
+			
+		skill = tf.reshape(skill, shape=(1, -1))
 		return skill
 	
 	@staticmethod
@@ -335,9 +374,23 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 		# Define the Actors (for each current skill, there is an actor to determine the action)
 		for actor in self.skilled_actors.actors:
 			_ = actor(tf.concat([tf.ones([1, self.args.s_dim]), tf.ones([1, self.args.g_dim])], 1))
+			
+		# Define the Directors (for each previous skill, there is a director to determine the current skill)
+		for director in self.skilled_actors.target_directors:
+			_ = director(tf.concat([tf.ones([1, self.args.s_dim]), tf.ones([1, self.args.g_dim])], 1))
+		
+		# Define the Actors (for each current skill, there is an actor to determine the action)
+		for actor in self.skilled_actors.target_actors:
+			_ = actor(tf.concat([tf.ones([1, self.args.s_dim]), tf.ones([1, self.args.g_dim])], 1))
 
 		# Define the Critic to estimate the value of (prev_skill, state, goal)
 		_ = self.critic(
+			np.ones([1, self.args.c_dim]),
+			np.ones([1, self.args.s_dim]),
+			np.ones([1, self.args.g_dim]),
+		)
+		
+		_ = self.critic_target(
 			np.ones([1, self.args.c_dim]),
 			np.ones([1, self.args.s_dim]),
 			np.ones([1, self.args.g_dim]),
@@ -354,22 +407,46 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 		
 	def change_training_mode(self, training_mode: bool):
 		self.skilled_actors.change_training_mode(training_mode)
+	
+	def update_target_networks(self):
+		
+		# Update the weights of the target actors and directors using Polyak averaging
+		for i in range(self.args.c_dim):
+			
+			# Update the reference actor
+			trg_actor_weights = self.skilled_actors.target_actors[i].get_weights()
+			actor_weights = self.skilled_actors.actors[i].get_weights()
+			for j in range(len(actor_weights)):
+				trg_actor_weights[j] = self.args.actor_polyak * trg_actor_weights[j] + \
+									   (1 - self.args.actor_polyak) * actor_weights[j]
+			self.skilled_actors.target_actors[i].set_weights(trg_actor_weights)
+			
+			# Update the reference director
+			trg_director_weights = self.skilled_actors.target_directors[i].get_weights()
+			director_weights = self.skilled_actors.directors[i].get_weights()
+			for j in range(len(director_weights)):
+				trg_director_weights[j] = self.args.director_polyak * trg_director_weights[j] + \
+										  (1 - self.args.director_polyak) * director_weights[j]
+			self.skilled_actors.target_directors[i].set_weights(trg_director_weights)
+			
+		# Update the weights of the target critic using Polyak averaging
 		
 
 class Agent(AgentBase):
 	def __init__(self, args,
-				 expert_buffer_unseg: ReplayBufferTf = None,
-				 policy_buffer_unseg: ReplayBufferTf = None):
+				 expert_buffer: ReplayBufferTf = None,
+				 offline_buffer: ReplayBufferTf = None):
 		
-		super().__init__(args, skilledDemoDICE(args), 'skilledDemoDICE', expert_buffer_unseg, policy_buffer_unseg)
+		super().__init__(args, skilledDemoDICE(args), 'skilledDemoDICE', expert_buffer, offline_buffer)
 	
 	def load_actor(self, dir_param):
 		self.model.skilled_actors.load_weights(dir_param + "/policy.h5")
 	
 	@tf.function
-	def compute_skills(self, buffered_data, gt_curr_skill):
+	def infer_skills(self, buffered_data, gt_curr_skill):
 		
-		viterbi_acc = 0.0
+		avg_viterbi_acc_per_step = 0.0
+		avg_viterbi_acc_per_ep = 0.0
 		log_probs = []
 	
 		# # Do viterbi decoding to get the best skill sequence for each episode and store it in the buffer
@@ -393,7 +470,8 @@ class Agent(AgentBase):
 			# Get the skill sequence for the episode
 			skill_seq, log_prob = self.model.skilled_actors.viterbi_decode(states=states,
 																		   actions=actions,
-																		   init_skill=init_skill)
+																		   init_skill=init_skill,
+																		   use_ref=True)
 			# Convert the skill sequence (T+1, 1) to one-hot encoding
 			skill_seq = tf.one_hot(tf.squeeze(skill_seq, axis=-1), depth=self.args.c_dim)
 			
@@ -403,117 +481,197 @@ class Agent(AgentBase):
 			new_prev_skills.append(tf.gather(skill_seq, tf.range(0, tf.shape(skill_seq)[0] - 1)))
 			new_curr_skills.append(tf.gather(skill_seq, tf.range(1, tf.shape(skill_seq)[0])))
 			
-			# Compute the accuracy of the viterbi decoded skill sequence (use self.offline_curr_skill)
-			viterbi_acc += tf.reduce_mean(tf.cast(tf.equal(tf.argmax(gt_curr_skill[ep_idx], axis=-1),
-														   tf.argmax(skill_seq[1:], axis=-1)),
-												  dtype=tf.float32))
+			# Viterbi's accuracy: avg. no. of correct skills in the viterbi decoded skill sequence
+			per_timestep_acc = tf.equal(tf.argmax(gt_curr_skill[ep_idx], axis=-1), tf.argmax(skill_seq[1:], axis=-1))
+			avg_viterbi_acc_per_step += tf.reduce_mean(tf.cast(per_timestep_acc, dtype=tf.float32))
+			avg_viterbi_acc_per_ep += tf.cast(tf.reduce_all(per_timestep_acc), dtype=tf.float32)
 			
 		
 		new_prev_skills = tf.stack(new_prev_skills, axis=0)
 		new_curr_skills = tf.stack(new_curr_skills, axis=0)
 		
 		result = {
-				'viterbi_acc': viterbi_acc/num_episodes,
+				'per_step_viterbi_acc': avg_viterbi_acc_per_step/num_episodes,
+				'per_ep_viterbi_acc': avg_viterbi_acc_per_ep/num_episodes,
 				'avg_log_prob': tf.reduce_mean(log_probs),
 		}
 		
 		return result, new_prev_skills, new_curr_skills
 	
+	@tf.function
 	def pretrain(self):
-		
-		log_step = 0
-		# For Verifying Viterbi Decoding
-		buffered_data = self.expert_buffer_unseg.sample_episodes()
-		expert_gt_curr_skill = buffered_data['curr_skills']
-		
-		self.model.skilled_actors.change_training_mode(training_mode=True)
-		with tqdm(total=self.args.max_pretrain_time_steps, desc='Pretraining', leave=False) as pbar:
-			
-			for total_time_steps in range(0, self.args.max_pretrain_time_steps, self.args.horizon):
 				
-				# Pretrain the actors and directors with the expert data
-				data_expert = self.sample_data(self.expert_buffer_unseg, self.args.batch_size)
-				loss_dict = self.model.pretrain(data_expert)
-				
-				vit_dec_result, _, _ = self.compute_skills(buffered_data, expert_gt_curr_skill)
-				
-				# Log
-				if self.args.log_wandb:
-					self.wandb_logger.log(
-						{
-							'pretrain_loss': loss_dict['loss/pi'],
-							'pretrain_expert_viterbi_acc': vit_dec_result['viterbi_acc'],
-						}, step=log_step)
-
-				# Update the progress bar with loss and time steps
-				pbar.set_postfix({'loss': loss_dict['loss/pi'].numpy(), 'time_steps': total_time_steps})
-				pbar.update(self.args.horizon)
-				log_step += 1
-		
-		return log_step
+		# Pretrain the actors and directors with the expert data
+		data_expert = self.sample_data(self.expert_buffer, self.args.batch_size)
+		loss_dict = self.model.pretrain(data_expert)
+		return loss_dict
 
 	def learn(self):
 		args = self.args
 		max_return, max_return_with_exp_assist = None, None
 		log_step = 0
 		
-		# Pretraining skilled actor on expert data for informed viterbi decoding
-		if self.args.max_pretrain_time_steps > 0:
+		# Saving G.T. skill sequences for verifying Viterbi Decoding
+		data_exp = self.expert_buffer.sample_episodes()
+		c_exp_curr_gt = copy.deepcopy(data_exp['curr_skills'])
+		data_off = self.offline_buffer.sample_episodes()
+		c_off_curr_gt = copy.deepcopy(data_off['curr_skills'])
+
+		# # Get the indices of the expert and offline episodes (offline data has expert data as well)
+		# ep_idxs_exp = list(range(0, self.expert_buffer.get_current_size_ep().numpy()))
+		# ep_idxs_off = list(set(range(0, self.offline_buffer.get_current_size_ep().numpy())) -
+		# 					   set(range(0, self.expert_buffer.get_current_size_ep().numpy())))
+		
+		# Pretraining skilled actors on expert data for informed viterbi decoding
+		if self.args.max_pretrain_time_steps > 0 and not self.args.skill_supervision == 'none':
 			tf.print("Pretraining the actors and directors with expert data")
 			logger.info("Pretraining the actors and directors with expert data")
-			log_step = self.pretrain()
 			
-		# For Viterbi Decoding
-		buffered_data = self.policy_buffer_unseg.sample_episodes()
-		offline_gt_curr_skill = copy.deepcopy(buffered_data['curr_skills'])
-		
-		with tqdm(total=args.max_time_steps, leave=False) as pbar:
-			for total_time_steps in range(0, args.max_time_steps, args.horizon):
+			self.model.skilled_actors.change_training_mode(training_mode=True)
+			with tqdm(total=self.args.max_pretrain_time_steps, desc='Pretraining', leave=False) as pbar:
 				
-				# [Evaluate] the policy
-				if total_time_steps % args.eval_interval == 0 and self.args.eval_demos > 0:
-					pbar.set_description('Evaluating')
-					max_return, max_return_with_exp_assist = self.evaluate(max_return=max_return,
-																		   max_return_with_exp_assist=max_return_with_exp_assist,
-																		   log_step=log_step)
+				for curr_t in range(0, self.args.max_pretrain_time_steps):
 					
-				# Update the offline skills [Must do at time step 0]
-				if total_time_steps % args.update_offline_skills_interval == 0:
-					vit_dec_result, new_prev_skills, new_curr_skills = self.compute_skills(buffered_data,
-																						   offline_gt_curr_skill)
+					# Pretrain the actors and directors with the expert data
+					loss_dict = self.pretrain()
 					
-					# # Step-2) Update the policy buffer with the viterbi decoded skill sequence [Semi-Supervised]
-					if not self.args.use_offline_gt_skills:
-						logger.info('Updating the policy buffer with the viterbi decoded skill sequence at train step {}'.format(total_time_steps))
-						buffered_data['prev_skills'] = new_prev_skills
-						buffered_data['curr_skills'] = new_curr_skills
-						self.policy_buffer_unseg.load_data_into_buffer(buffered_data=buffered_data)
+					# Update the reference actors and directors at every update interval
+					# (skills from now on are sampled by the reference actors and directors)
+					self.model.update_target_networks()
 					
+					vit_dec_result, _, _ = self.infer_skills(data_exp, c_exp_curr_gt)
+					
+					# Log
 					if self.args.log_wandb:
-						self.wandb_logger.log(vit_dec_result, step=log_step)
-				
+						dict_to_log = {
+							f'pretrain_{key}': loss_dict[key] for key in loss_dict.keys()
+						}
+						dict_to_log.update({
+							'pretrain_expert_viterbi_acc': vit_dec_result['viterbi_acc'],
+						})
+						self.wandb_logger.log(
+							dict_to_log, step=log_step)
+					
+					# Update the progress bar with loss and time steps
+					pbar.set_postfix({'loss': loss_dict['loss/pi'].numpy(), 'time_steps': curr_t})
+					pbar.update(1)
+					log_step += 1
+			
+			
+			# Save the model
+			self.save_model(args.dir_param)
+
+		with tqdm(total=args.max_time_steps, leave=False) as pbar:
+			for curr_t in range(0, args.max_time_steps):
+
+				# [Evaluate] the policy
+				if curr_t % args.eval_interval == 0 and self.args.eval_demos > 0:
+					
+					pbar.set_description('Evaluating')
+					
+					max_return, max_return_with_exp_assist = self.evaluate(
+						max_return=max_return,
+						max_return_with_exp_assist=max_return_with_exp_assist,
+						log_step=log_step
+					)
+					
+				# Update the reference actors and directors using polyak averaging
+				if curr_t % args.update_target_interval == 0:
+					tf.print("Updating the target actors and directors at train step {}".format(curr_t))
+					self.model.update_target_networks()
+
+				# Update the offline skills [Must do at time step 0]
+				if curr_t % args.update_skills_interval == 0:
+					
+					# Full supervision of latent skills: No update of expert and offline skills
+					if self.args.skill_supervision == 'full':
+						
+						# vit_res_exp, _, _ = self.infer_skills(data_exp, c_exp_curr_gt)
+						# vit_res_off, _, _ = self.infer_skills(data_off, c_off_curr_gt)
+						vit_res_exp = {
+							'per_step_viterbi_acc': 1.0,
+							'per_ep_viterbi_acc': 1.0,
+						}
+						vit_res_off = {
+							'per_step_viterbi_acc': 1.0,
+							'per_ep_viterbi_acc': 1.0,
+						}
+					
+					# Semi-supervision of latent skills: Update offline skills
+					elif 'semi' in self.args.skill_supervision:
+						# vit_res_exp, _, _ = self.infer_skills(data_exp, c_exp_curr_gt)
+						vit_res_exp = {
+							'per_step_viterbi_acc': 1.0,
+							'per_ep_viterbi_acc': 1.0,
+						}
+						
+						vit_res_off, c_off_prev, c_off_curr = self.infer_skills(data_off, c_off_curr_gt)
+						logger.info('Updating the offline buffer with the viterbi decoded '
+									'skill sequence at train step {}'.format(curr_t))
+						
+						# TODO: Do not update the expert episode skills stored in the offline buffer
+						# # Skip ep_idxs_exp and update ep_idxs_off - ep_idxs_exp [TEMP]
+						# data_off['prev_skills'] = tf.concat([tf.gather(data_off['prev_skills'], ep_idxs_exp),
+						# 									 tf.gather(c_off_prev, ep_idxs_off)], axis=0)
+						# data_off['curr_skills'] = tf.concat([tf.gather(data_off['curr_skills'], ep_idxs_exp),
+						# 									 tf.gather(c_off_curr, ep_idxs_off)], axis=0)
+						
+					# Unsupervised latent skills: Update expert and offline skills
+					elif self.args.skill_supervision == 'none':
+						decoding_start_time = time.time()
+						vit_res_exp, c_exp_prev, c_exp_curr = self.infer_skills(data_exp, c_exp_curr_gt)
+						vit_res_off, c_off_prev, c_off_curr = self.infer_skills(data_off, c_off_curr_gt)
+						tf.print("Decoding time: {}".format(time.time() - decoding_start_time))
+						
+						# Update the expert buffer with the viterbi decoded skill sequence
+						data_exp['prev_skills'] = c_exp_prev
+						data_exp['curr_skills'] = c_exp_curr
+						
+						# Update the offline buffer with the viterbi decoded skill sequence
+						# (Redundant Update the expert episode skills with offline decoded skills)
+						data_off['prev_skills'] = c_off_prev
+						data_off['curr_skills'] = c_off_curr
+					
+					# Load the updated expert data into the expert buffer
+					self.expert_buffer.load_data_into_buffer(buffered_data=data_exp, clear_buffer=True)
+					
+					# Load the updated expert data and offline data into the offline buffer
+					self.offline_buffer.load_data_into_buffer(buffered_data=data_exp, clear_buffer=True)
+					self.offline_buffer.load_data_into_buffer(buffered_data=data_off, clear_buffer=False)
+
+					if self.args.log_wandb:
+						self.wandb_logger.log({
+							'expert_viterbi_acc': vit_res_exp['per_step_viterbi_acc'],
+							'offline_viterbi_acc': vit_res_off['per_step_viterbi_acc'],
+							'expert_viterbi_acc_ep': vit_res_exp['per_ep_viterbi_acc'],
+							'offline_viterbi_acc_ep': vit_res_off['per_ep_viterbi_acc'],
+						}, step=log_step)
+
 				# [Train] the policy
 				pbar.set_description('Training')
 				avg_loss_dict = self.train()
-				
+
 				for key in avg_loss_dict.keys():
 					avg_loss_dict[key] = avg_loss_dict[key].numpy().item()
-				
+
 				# Log
 				if self.args.log_wandb:
-					self.wandb_logger.log(avg_loss_dict, step=log_step)
-					self.wandb_logger.log({
-						'policy_buffer_size': self.policy_buffer_unseg.get_current_size_trans(),
-						'expert_buffer_size': self.expert_buffer_unseg.get_current_size_trans(),
-					}, step=log_step)
-				
+					avg_loss_dict.update({
+						'policy_buffer_size': self.offline_buffer.get_current_size_trans(),
+						'expert_buffer_size': self.expert_buffer.get_current_size_trans(),
+					})
+					self.wandb_logger.log(
+						avg_loss_dict,
+						step=log_step
+					)
+
 				# Update
-				pbar.update(args.horizon)
+				pbar.update(1)
 				log_step += 1
-		
+
 		# Save the model
 		self.save_model(args.dir_param)
-		
+
 		if args.test_demos > 0:
 			self.visualise(use_expert_skill=False)
-			self.visualise(use_expert_skill=True)
+			# self.visualise(use_expert_skill=True)

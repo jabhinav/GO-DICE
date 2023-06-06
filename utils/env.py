@@ -1,10 +1,9 @@
 from domains.PnP import MyPnPEnvWrapper
-
+from domains.PnPExpert import PnPExpertOneObjImitator, PnPExpertTwoObjImitator, PnPExpertMultiObjImitator
 
 def get_PnP_env(args):
-	env = MyPnPEnvWrapper(args.full_space_as_goal, two_obj=args.two_object,
-						  stacking=args.stacking, target_in_the_air=args.target_in_the_air,
-						  fix_goal=args.fix_goal, fix_object=args.fix_object, )
+	env = MyPnPEnvWrapper(args.full_space_as_goal, num_objs=args.num_objs, stacking=args.stacking,
+						  fix_goal=args.fix_goal, fix_object=args.fix_object)  # For Debugging
 	return env
 
 
@@ -15,7 +14,11 @@ def save_env_img(env: MyPnPEnvWrapper, path_to_save="./env_curr_state.png"):
 	im.save(path_to_save)
 
 
-def get_config_env(args, ag_in_env_goal=False):
+def get_config_env(args, ag_in_env_goal):
+	"""
+	:param args: Namespace object
+	:param ag_in_env_goal: If True, then achieved goal is in the same space as env goal
+	"""
 	env = get_PnP_env(args)
 	obs, ag, g = env.reset()
 	
@@ -24,10 +27,29 @@ def get_config_env(args, ag_in_env_goal=False):
 	args.a_dim = env.action_space.shape[0]
 	args.action_max = float(env.action_space.high[0])
 	
-	args.c_dim = env.latent_dim  # In a way defines number of skills
+	# We will overwrite this later by what expert's latent dim is
+	# args.c_dim = env.latent_dim  # In a way defines number of effective skills
+	
+	# Specify the expert's latent skill dimension [Default]
+	# Define number of skills, this could be different from agent's practiced skill dimension
+	assert hasattr(args, 'num_objs')
+	args.c_dim = 3 * args.num_objs
+	
 	if ag_in_env_goal:
 		args.ag_dim = args.g_dim  # Achieved Goal in the same space as Env Goal
 	else:
-		args.ag_dim = 3  # 3D position of the goal in the space of objects
+		args.ag_dim = 3  # Goal/Object position in the 3D space
 	
 	return args
+
+
+def get_expert(num_objects: int, args):
+	if num_objects == 1:
+		expert = PnPExpertOneObjImitator(args)
+	elif num_objects == 2:
+		expert = PnPExpertTwoObjImitator(args)
+	elif num_objects == 3:
+		expert = PnPExpertMultiObjImitator(args)
+	else:
+		raise NotImplementedError
+	return expert

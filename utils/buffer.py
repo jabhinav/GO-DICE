@@ -1,4 +1,7 @@
-def get_buffer_shape(args):
+from typing import Dict, Tuple
+
+
+def get_buffer_shape(args) -> Dict[str, Tuple[int, ...]]:
     buffer_shape = {
         'prev_goals': (args.horizon, args.ag_dim),
         'prev_skills': (args.horizon, args.c_dim),

@@ -16,7 +16,7 @@ from domains.PnP import MyPnPEnvWrapper
 from her.replay_buffer import ReplayBufferTf
 from her.transitions import sample_transitions
 from her.rollout import RolloutWorker
-from networks.general import Actor, Critic
+from networks.general import preTanhActor, Critic
 from utils.buffer import get_buffer_shape
 from utils.env import get_PnP_env
 from utils.custom import evaluate_worker
@@ -70,7 +70,7 @@ class ValueDICE(tf.keras.Model, ABC):
 		self.args.EPS = np.finfo(np.float32).eps  # Small value = 1.192e-07 to avoid division by zero in grad penalty
 		
 		# Define Networks
-		self.actor = Actor(args.a_dim)
+		self.actor = preTanhActor(args.a_dim)
 		self.critic = Critic()
 		
 		# Define Optimizers

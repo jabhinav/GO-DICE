@@ -1,5 +1,6 @@
 import logging
 import sys
+from typing import Dict, Tuple, List
 
 import numpy as np
 import tensorflow as tf
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReplayBufferTf:
-	def __init__(self, buffer_shapes, size_in_transitions, T, transition_fn=None):
+	def __init__(self, buffer_shapes: Dict[str, Tuple[int, ...]], size_in_transitions, T, transition_fn=None):
 		"""Creates a replay buffer.
 
 		Args:
@@ -28,7 +29,7 @@ class ReplayBufferTf:
 		self.n_transitions_stored = tf.Variable(0, dtype=tf.int32)  # Size of buffer in terms of no. of transitions
 		
 		self.transition_fn = transition_fn
-		self.buffer_keys = [key for key in buffer_shapes.keys()]
+		self.buffer_keys: List[str] = [key for key in buffer_shapes.keys()]
 		tensor_spec = [tf.TensorSpec(buffer_shapes[key], tf.float32, key) for key in self.buffer_keys]
 		self.table = Table(tensor_spec, capacity=self.buffer_size)
 	
@@ -145,10 +146,14 @@ class ReplayBufferTf:
 		
 		if clear_buffer:
 			self.clear_buffer()
-			
+		
 		if num_demos_to_load is not None:
+			
+			# Randomly sample idxs to load
+			idxs = np.random.choice(len(buffered_data['actions']), size=num_demos_to_load, replace=False).tolist()
+			
 			for key in buffered_data.keys():
-				buffered_data[key] = buffered_data[key][:num_demos_to_load]
+				buffered_data[key] = tf.gather(buffered_data[key], idxs)
 		
 		# Check if all tensors are present in loaded data
 		data_sizes = [len(buffered_data[key]) for key in self.buffer_keys]

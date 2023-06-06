@@ -15,7 +15,7 @@ from domains.PnP import MyPnPEnvWrapper
 from domains.PnPExpert import PnPExpert, PnPExpertTwoObj
 from her.replay_buffer import ReplayBufferTf
 from her.transitions import sample_transitions
-from networks.general import Actor, GoalPredictor, BCSkillPredictor, SkillTerminationPredictor
+from networks.general import preTanhActor, GoalPredictor, BCSkillPredictor, SkillTerminationPredictor
 from utils.buffer import get_buffer_shape
 from utils.env import get_PnP_env
 
@@ -32,7 +32,7 @@ class GoalGuidedOptionBC(tf.keras.Model, ABC):
 		
 		# Declare Policies corresponding to each option
 		for i in range(args.num_skills):
-			setattr(self, "policy_{}".format(i), Actor(args.a_dim))
+			setattr(self, "policy_{}".format(i), preTanhActor(args.a_dim))
 			setattr(self, "optimP_{}".format(i), tf.keras.optimizers.Adam(self.args.vae_lr))
 		
 		# Declare the goal predictor

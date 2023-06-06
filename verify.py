@@ -12,23 +12,34 @@ from utils.env import get_PnP_env
 logger = logging.getLogger(__name__)
 
 
-def run_verify(args):
+def run_verify(args, model_dir):
 	args.log_wandb = False
-	dir_test = './logging/run20230419-224924/models'
 	
 	# ############################################# TESTING #################################################### #
-	print("\n------------- Verifying SkilledActor at {} -------------".format(dir_test))
+	print("\n------------- Verifying SkilledActor at {} -------------".format(model_dir))
 	from models.skilledDemoDICE import Agent as Agent_skilledDemoDICE
 	agent = Agent_skilledDemoDICE(args)
 	
-	logger.info("Loading Model Weights from {}".format(dir_test))
-	agent.load_model(dir_param=dir_test)
+	logger.info("Loading Model Weights from {}".format(model_dir))
+	agent.load_model(dir_param=model_dir)
 	
-	agent.visualise(use_expert_skill=True, use_expert_action=True)
+	resume_files = os.listdir('./pnp_data/two_obj_0_1_train_env_states')
+	resume_files = [f for f in resume_files if f.endswith('.pkl')]
+	resume_states = []
+	for f in resume_files:
+		with open(os.path.join('./pnp_data/two_obj_0_1_train_env_states', f), 'rb') as file:
+			resume_states.append(pickle.load(file))
+	
+	agent.visualise(
+		use_expert_skill=False,
+		use_expert_action=False,
+		resume_states=None,
+		num_episodes=2,
+	)
 
 	# # ############################################# EXPERT WORKER ############################################# #
 	# exp_env = get_PnP_env(args)
-	#
+	
 	# if args.two_object:
 	# 	expert_policy = PnPExpertTwoObj(expert_behaviour=args.expert_behaviour, wrap_skill_id=args.wrap_skill_id)
 	# else:
