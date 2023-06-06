@@ -1,11 +1,13 @@
+import copy
+
 from typing import List
 
 import numpy as np
 import tensorflow as tf
 
 
-def clip_action(ac):
-	return np.clip(ac, -1, 1)
+def clip_action(a):
+	return np.clip(a, -1, 1)
 
 
 class PnPExpert:
@@ -722,21 +724,219 @@ class PnPExpertTwoObj:
 		return curr_goal
 
 
-class PnPExpertTwoObjImitator:
-	def __init__(self, wrap_skill_id: str = '1'):
-		
-		self.wrap_skill_id = wrap_skill_id
+class PnPExpertOneObjImitator:
+	"""
+	3-Skill Expert for the PnP environment
+	"""
+	def __init__(self, args):
+		self.args = args
 		self.step_size = 6
 		# self.sub_goal_height = 0.55  # Height to which block will be first taken before moving towards goal.
 		# self.env_goal_thresh = 0.005  # Distance threshold for to consider some goal reached
 		
-		self.use_expert_pick = False
-		self.use_expert_grab = False
-		self.use_expert_drop = True
+		self.action_wise_expert_assist = {
+			'pick': False,
+			'grab': False,
+			'drop': False,
+		}
 		
-		self.gripper_raise_iters: int = 8
+		self.blockDropped = False
+		self.max_gripper_raise_iters: int = 6
+		self.curr_grasp_iters: int = copy.deepcopy(self.max_gripper_raise_iters)
 	
-	def policy_pick(self, state, env_goal, curr_skill, grip=0.05):  # My open grip is 1.0
+	def policy_pick(self, s_t, g_env, c_t, grip=0.1):  # 0.05 or 1.0
+		
+		# TODO: This logic of raising the gripper after drop won't work if object goal is in mid-air
+		# if self.blockDropped:
+		# 	if not self.curr_grasp_iters == 0:
+		# 		# First open the gripper slightly
+		# 		if self.curr_grasp_iters > 4:
+		# 			a = np.array([0, 0, 0])
+		# 		else:
+		# 			# Then raise the gripper
+		# 			a = np.array([0, 0, 0.5])
+		# 		a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		# 		self.curr_grasp_iters -= 1
+		# 	else:
+		# 		# Keep the gripper raised
+		# 		a = np.array([0, 0, 0])
+		# 		a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		#
+		# 	return a
+		
+		objectRelPos = s_t[6:9]
+		object_oriented_goal = objectRelPos + np.array([0, 0, 0.03])  # My threshold is 0.08
+		a = clip_action(object_oriented_goal * self.step_size)
+		a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		return a
+	
+	def policy_grab(self, state, g_env, c_t, grip=-0.1):  # -0.005 or -1
+		objectRelPos = state[6:9]
+		a = clip_action(objectRelPos * self.step_size)
+		a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		return a
+	
+	def policy_drop(self, s_t, g_env, c_t, grip=-0.1):  # -0.005 or -1
+		"""
+		:param s_t: current state
+		:param g_env: env goal position
+		:param c_t: current skill
+		:param grip: gripper state (set to -1 to close the gripper)
+		This logic is fine, however sometimes the gripper is not able to satisfy the env goal threshold as the current
+		position is of the gripper and not the block
+		"""
+
+		# Drop the first block
+		s_obj = s_t[3:6]
+		g_obj = g_env[:3]
+		g_delta = g_obj - s_obj
+		
+		# Move Diagonally above the goal
+		BlockAboveGoal = True if np.linalg.norm(g_delta[:2]) <= 0.01 else False
+		if not BlockAboveGoal:
+			a = clip_action((g_delta + np.array([0, 0, 0.1])) * self.step_size)
+			a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		else:
+			a = clip_action(g_delta * self.step_size)
+			a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		return a
+	
+	def sample_action(self, s_t, g_env, c_t, epsilon=0.0, stddev=0.0, a_model=None):
+		
+		if np.argmax(c_t) == 0:
+			# Pick the block
+			a = self.policy_pick(s_t, g_env, c_t) if self.action_wise_expert_assist['pick'] or a_model is None else a_model
+		
+		elif np.argmax(c_t) == 1:
+			# Grab the block
+			a = self.policy_grab(s_t, g_env, c_t) if self.action_wise_expert_assist['grab'] or a_model is None else a_model
+		
+		else:
+			# Drop the block
+			a = self.policy_drop(s_t, g_env, c_t) if self.action_wise_expert_assist['drop'] or a_model is None else a_model
+		
+		# Epsilon Greedy
+		if np.random.uniform() < epsilon:
+			# Take a random action
+			a = np.random.uniform(low=-1.0, high=1.0, size=(4,))
+		else:
+			# Add noise to the action
+			a = np.random.normal(loc=a, scale=stddev)
+		a = clip_action(a)
+		
+		return a
+	
+	def sample_curr_skill(self, s_t, g_env, c_t_1):
+		
+		delta_obj = s_t[6:9]
+		delta_goal = g_env - s_t[3:6]
+		
+		# If previous skill was pick object 1
+		if np.argmax(c_t_1) == 0:
+			
+			if self.blockDropped:
+				# Keep on the pick skill
+				c_t = np.array([1, 0, 0])
+			else:
+				# If gripper is not close to object 1, then keep picking object 1
+				# print(np.linalg.norm(delta_obj1 + np.array([0, 0, 0.03])))
+				if np.linalg.norm(delta_obj + np.array([0, 0, 0.03])) < 0.01:
+					# Transition to grab object 1
+					c_t = np.array([0, 1, 0])
+				else:
+					# Keep picking object 1
+					c_t = np.array([1, 0, 0])
+		
+		# If previous skill was grab object 1
+		elif np.argmax(c_t_1) == 1:
+			# If gripper is not close to object 1, then keep grabbing object 1
+			if np.linalg.norm(delta_obj) < 0.005:
+				# Grab skill should be terminated -> Transition to drop skill
+				c_t = np.array([0, 0, 1])
+			else:
+				c_t = np.array([0, 1, 0])
+		
+		# If previous skill was drop object 1
+		elif np.argmax(c_t_1) == 2:
+			# If gripper is not close to goal 1, then keep dropping object 1
+			if np.linalg.norm(delta_goal) < 0.01:
+				self.blockDropped = True
+				# Drop skill should be terminated -> Transition to pick skill [Don't unless obj goal is mid-air]
+				# c_t = np.array([1, 0, 0])
+				c_t = np.array([0, 0, 1])
+			else:
+				# Keep dropping object 1
+				c_t = np.array([0, 0, 1])
+				
+		else:
+			raise ValueError('Invalid previous skill: {}'.format(c_t_1))
+		
+		return np.cast[np.float32](c_t)
+	
+	def act(self, state, env_goal, prev_goal, prev_skill, epsilon=0.0, stddev=0.0):
+		state, env_goal, prev_goal, prev_skill = state[0], env_goal[0], prev_goal[0], prev_skill[0]
+		state, env_goal, prev_goal, prev_skill = state.numpy(), env_goal.numpy(), prev_goal.numpy(), prev_skill.numpy()
+		
+		# Determine the current goal to achieve
+		curr_goal = env_goal
+		
+		# Determine the current skill to execute
+		curr_skill = self.sample_curr_skill(state, env_goal, prev_skill)
+		
+		# Execute the current skill
+		curr_action = self.sample_action(state, env_goal, curr_skill, epsilon, stddev)
+		
+		# Convert np arrays to tensorflow tensor with shape (1,-1)
+		curr_goal = tf.convert_to_tensor(curr_goal.reshape(1, -1), dtype=tf.float32)
+		curr_skill = tf.convert_to_tensor(curr_skill.reshape(1, -1), dtype=tf.int32)
+		curr_action = tf.convert_to_tensor(curr_action.reshape(1, -1), dtype=tf.float32)
+		return curr_goal, curr_skill, curr_action
+	
+	def sample_curr_goal(self, state, prev_goal, for_expert=True):
+		raise NotImplementedError
+	
+	def reset(self, init_state, env_goal):
+		self.blockDropped = False
+		self.curr_grasp_iters: int = copy.deepcopy(self.max_gripper_raise_iters)
+	
+	@staticmethod
+	def get_init_skill():
+		skill = np.array([1, 0, 0], dtype=np.int64)
+		# Convert to tf tensor
+		skill = tf.convert_to_tensor(skill, dtype=tf.float32)
+		skill = tf.reshape(skill, shape=(1, -1))
+		return skill
+	
+	@staticmethod
+	def get_init_goal(init_state, g_env):
+		curr_goal = tf.reshape(g_env, shape=(1, -1))
+		return curr_goal
+
+
+class PnPExpertTwoObjImitator:
+	"""
+	6-Skill Expert for PnP with 2 objects
+	"""
+	def __init__(self, args):
+		
+		self.args = args
+		self.step_size = 6
+		# self.sub_goal_height = 0.55  # Height to which block will be first taken before moving towards goal.
+		# self.env_goal_thresh = 0.005  # Distance threshold for to consider some goal reached
+		
+		self.action_wise_expert_assist = {
+			'pick:0': False,
+			'grab:0': False,
+			'drop:0': False,
+			'pick:1': False,
+			'grab:1': False,
+			'drop:1': False,
+		}
+		
+		self.max_gripper_raise_iters: int = 6
+		self.curr_grasp_iters: int = copy.deepcopy(self.max_gripper_raise_iters)
+	
+	def policy_pick(self, state, env_goal, curr_skill, grip=0.1):  # 0.05 or 1.0
 		gripper_pos = state[:3]
 		if np.argmax(curr_skill) == 0:
 			# Pick the first block
@@ -749,16 +949,16 @@ class PnPExpertTwoObjImitator:
 		
 		if np.argmax(curr_skill) == 3:
 			# We need to raise the gripper first before moving towards the goal
-			gripperRaised = True if self.gripper_raise_iters == 0 else False
+			gripperRaised = True if self.curr_grasp_iters == 0 else False
 			if not gripperRaised:
 				# First open the gripper slightly
-				if self.gripper_raise_iters > 4:
+				if self.curr_grasp_iters > 4:
 					a = np.array([0, 0, 0])
 				else:
 					# Then raise the gripper
-					a = np.array([0, 0, 1.])
-				a = np.concatenate([a, np.array([0.005])], dtype=np.float32)
-				self.gripper_raise_iters -= 1
+					a = np.array([0, 0, 0.5])
+				a = np.concatenate([a, np.array([grip])], dtype=np.float32)  # 0.005 or 0.5
+				self.curr_grasp_iters -= 1
 				return a
 		
 		object_oriented_goal = objectRelPos + np.array([0, 0, 0.03])  # My threshold is 0.08
@@ -766,7 +966,7 @@ class PnPExpertTwoObjImitator:
 		a = np.concatenate([a, np.array([grip])], dtype=np.float32)
 		return a
 	
-	def policy_grab(self, state, env_goal, curr_skill, grip=-0.005):
+	def policy_grab(self, state, env_goal, curr_skill, grip=-0.1):  # -0.005 or -1
 		if np.argmax(curr_skill) == 1:
 			# Grab the first block
 			objectRelPos = state[9:12]
@@ -780,7 +980,7 @@ class PnPExpertTwoObjImitator:
 		a = np.concatenate([a, np.array([grip])], dtype=np.float32)
 		return a
 		
-	def policy_drop(self, state, env_goal, curr_skill, grip=-0.005):
+	def policy_drop(self, state, env_goal, curr_skill, grip=-0.1):  # -0.005 or -1
 		"""
 		:param state: current state
 		:param env_goal: env goal position
@@ -794,48 +994,56 @@ class PnPExpertTwoObjImitator:
 			# Drop the first block
 			object_pos = state[3:6]
 			goal = env_goal[:3]
-			delta_obj = state[9:12]
-			delta_goal = goal - state[3:6]
+			delta_goal = goal - object_pos
 		elif np.argmax(curr_skill) == 5:
 			# Drop the second block
 			object_pos = state[6:9]
 			goal = env_goal[3:]
-			delta_obj = state[12:15]
-			delta_goal = goal - state[6:9]
+			delta_goal = goal - object_pos
 		else:
 			raise ValueError("Invalid skill index for drop! {}".format(np.argmax(curr_skill)))
 		
 		# Move Diagonally above the goal
 		BlockAboveGoal = True if np.linalg.norm(delta_goal[:2]) <= 0.01 else False
 		if not BlockAboveGoal:
-			a = clip_action((goal + np.array([0, 0, 0.1]) - object_pos) * self.step_size)
+			a = clip_action((delta_goal + np.array([0, 0, 0.1])) * self.step_size)
 			a = np.concatenate([a, np.array([grip])], dtype=np.float32)
 		else:
-			_a = clip_action((goal - object_pos) * self.step_size)
-			a = np.concatenate([_a, np.array([grip])], dtype=np.float32)
+			a = clip_action(delta_goal * self.step_size)
+			a = np.concatenate([a, np.array([grip])], dtype=np.float32)
 			
 		return a
 	
-	def sample_action(self, state, env_goal, curr_skill, model_action=None):
-		assert self.wrap_skill_id == '1'
+	def sample_action(self, state, env_goal, curr_skill, a_model=None, epsilon=0.0, stddev=0.0):
 		
-		if np.argmax(curr_skill) == 0 or np.argmax(curr_skill) == 3:
-			# Pick the block
-			a = self.policy_pick(state, env_goal, curr_skill) if self.use_expert_pick else model_action
+		if np.argmax(curr_skill) == 0:
+			# Pick the block:0
+			a = self.policy_pick(state, env_goal, curr_skill) if self.action_wise_expert_assist['pick:0'] or a_model is None else a_model
+		
+		elif np.argmax(curr_skill) == 1:
+			# Grab the block:0
+			a = self.policy_grab(state, env_goal, curr_skill) if self.action_wise_expert_assist['grab:0'] or a_model is None else a_model
 			
-		elif np.argmax(curr_skill) == 1 or np.argmax(curr_skill) == 4:
-			# Grab the block
-			a = self.policy_grab(state, env_goal, curr_skill) if self.use_expert_grab else model_action
+		elif np.argmax(curr_skill) == 2:
+			# Drop the block:0
+			a = self.policy_drop(state, env_goal, curr_skill) if self.action_wise_expert_assist['drop:0'] or a_model is None else a_model
+		
+		elif np.argmax(curr_skill) == 3:
+			# Pick the block:1
+			a = self.policy_pick(state, env_goal, curr_skill) if self.action_wise_expert_assist['pick:1'] or a_model is None else a_model
+
+		elif np.argmax(curr_skill) == 4:
+			# Grab the block:1
+			a = self.policy_grab(state, env_goal, curr_skill) if self.action_wise_expert_assist['grab:1'] or a_model is None else a_model
+			
 		else:
-			# Drop the block
-			a = self.policy_drop(state, env_goal, curr_skill) if self.use_expert_drop else model_action
+			# Drop the block:1
+			a = self.policy_drop(state, env_goal, curr_skill) if self.action_wise_expert_assist['drop:1'] or a_model is None else a_model
 			
 		return a
 
 	
 	def sample_curr_skill(self, state, env_goal, prev_skill):
-		
-		assert self.wrap_skill_id == '1'
 		
 		delta_obj1 = state[9:12]
 		delta_obj2 = state[12:15]
@@ -897,7 +1105,7 @@ class PnPExpertTwoObjImitator:
 		
 		return np.cast[np.float32](curr_skill)
 	
-	def act(self, state, env_goal, prev_goal, prev_skill, **kwargs):
+	def act(self, state, env_goal, prev_goal, prev_skill, epsilon=0.0, stddev=0.0):
 		state, env_goal, prev_goal, prev_skill = state[0], env_goal[0], prev_goal[0], prev_skill[0]
 		state, env_goal, prev_goal, prev_skill = state.numpy(), env_goal.numpy(), prev_goal.numpy(), prev_skill.numpy()
 		
@@ -920,11 +1128,253 @@ class PnPExpertTwoObjImitator:
 		raise NotImplementedError
 	
 	def reset(self, init_state, env_goal):
-		self.gripper_raise_iters: int = 8
+		self.curr_grasp_iters: int = copy.deepcopy(self.max_gripper_raise_iters)
+	
+	def get_init_skill(self):
+		if self.args.expert_behaviour == '0':
+			skill = np.array([1, 0, 0, 0, 0, 0], dtype=np.int64)
+		elif self.args.expert_behaviour == '1':
+			if np.random.uniform() < 0.5:
+				skill = np.array([1, 0, 0, 0, 0, 0], dtype=np.int64)
+			else:
+				skill = np.array([0, 0, 0, 1, 0, 0], dtype=np.int64)
+		else:
+			raise NotImplementedError
+		
+		# Convert to tf tensor
+		skill = tf.convert_to_tensor(skill, dtype=tf.float32)
+		skill = tf.reshape(skill, shape=(1, -1))
+		return skill
 	
 	@staticmethod
-	def get_init_skill():
-		skill = np.array([1, 0, 0, 0, 0, 0], dtype=np.int64)
+	def get_init_goal(init_state, g_env):
+		curr_goal = tf.reshape(g_env, shape=(1, -1))
+		return curr_goal
+
+
+class PnPExpertMultiObjImitator:
+	"""
+	Multi-Skill Expert for PnP with Multiple objects
+	"""
+	
+	def __init__(self, args):
+		
+		self.num_objects = 3
+		self.args = args
+		self.step_size = 6
+		self.skill_types = ['pick', 'grab', 'drop']
+		
+		# self.sub_goal_height = 0.55  # Height to which block will be first taken before moving towards goal.
+		# self.env_goal_thresh = 0.005  # Distance threshold for to consider some goal reached
+		
+		self.action_wise_expert_assist = {
+			'pick:0': False,
+			'grab:0': False,
+			'drop:0': False,
+			'pick:1': False,
+			'grab:1': False,
+			'drop:1': False,
+			'pick:2': False,
+			'grab:2': False,
+			'drop:2': False,
+		}
+		
+		self.action_wise_expert_assist = {
+			skill_type + ':' + str(obj_idx): False for obj_idx in range(self.num_objects) for skill_type in self.skill_types
+		}
+		
+		self.max_gripper_raise_iters: int = 10  # For stacking, increase this value to 8 else keep it 6? But why?
+		# Ans) Because after stacking each object on top of another object, we need to raise the gripper to a higher
+		# 	   height to pick the next object, otherwise, the gripper will collide with the object on top.
+		self.curr_gripper_raise_iters: List[int] = [copy.deepcopy(self.max_gripper_raise_iters) for _ in range(self.num_objects)]
+		self.obj_order = None  # The order of the objects to be picked up
+	
+	def policy_pick(self, state, env_goal, curr_skill, grip=0.1):  # 0.05 or 1.0
+		
+		ooi = np.argmax(curr_skill) // 3
+		offset = 3 + 3 * self.num_objects
+		objectRelPos = state[offset + 3 * ooi: offset + 3 * (1 + ooi)]
+		
+		pick_idxs = [i * 3 for i in range(self.num_objects)]
+		if np.argmax(curr_skill) in pick_idxs[1:]:  # If the object being picked is not the first object
+			# We need to raise the gripper first before moving towards the object
+			gripperRaised = True if self.curr_gripper_raise_iters[ooi] == 0 else False
+			if not gripperRaised:
+				# First open the gripper slightly
+				if self.curr_gripper_raise_iters[ooi] > self.max_gripper_raise_iters - 2:  # open for 2 steps
+					a = np.array([0, 0, 0])
+				else:
+					# Then raise the gripper
+					a = np.array([0, 0, 0.5])
+				a = np.concatenate([a, np.array([grip])], dtype=np.float32)  # 0.005 or 0.5
+				self.curr_gripper_raise_iters[ooi] -= 1
+				return a
+		
+		object_oriented_goal = objectRelPos + np.array([0, 0, 0.03])  # My threshold is 0.08
+		a = clip_action(object_oriented_goal * self.step_size)
+		a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		return a
+	
+	def policy_grab(self, state, env_goal, curr_skill, grip=-0.1):  # -0.005 or -1
+		
+		ooi = np.argmax(curr_skill) // 3
+		offset = 3 + 3 * self.num_objects
+		objectRelPos = state[offset + 3 * ooi: offset + 3 * (1 + ooi)]
+		
+		a = clip_action(objectRelPos * self.step_size)
+		a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		return a
+	
+	def policy_drop(self, state, env_goal, curr_skill, grip=-0.1):  # -0.005 or -1
+		"""
+		:param state: current state
+		:param env_goal: env goal position
+		:param curr_skill: current skill
+		:param grip: gripper state (set to -1 to close the gripper)
+		This logic is fine, however sometimes the gripper is not able to satisfy the env goal threshold as the current
+		position is of the gripper and not the block
+		"""
+		# gripper_pos = state[:3]
+		ooi = np.argmax(curr_skill) // 3
+		object_pos = state[3 + 3 * ooi: 3 + 3 * (1 + ooi)]
+		goal = env_goal[3 * ooi: 3 * (1 + ooi)]
+		delta_goal = goal - object_pos
+		
+		# Move Diagonally above the goal
+		BlockAboveGoal = True if np.linalg.norm(delta_goal[:2]) <= 0.01 else False
+		if not BlockAboveGoal:
+			a = clip_action((delta_goal + np.array([0, 0, 0.1])) * self.step_size)
+			a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		else:
+			a = clip_action(delta_goal * self.step_size)
+			a = np.concatenate([a, np.array([grip])], dtype=np.float32)
+		
+		return a
+	
+	def sample_action(self, state, env_goal, curr_skill, a_model=None, epsilon=0.0, stddev=0.0):
+		
+		pick_idxs = [i * 3 for i in range(self.num_objects)]
+		grab_idxs = [i * 3 + 1 for i in range(self.num_objects)]
+		drop_idxs = [i * 3 + 2 for i in range(self.num_objects)]
+		
+		obj_of_interest = np.argmax(curr_skill) // 3
+		
+		if np.argmax(curr_skill) in pick_idxs:
+			# Pick the block
+			a = self.policy_pick(state, env_goal, curr_skill) if self.action_wise_expert_assist['pick:{}'.format(
+				obj_of_interest)] or a_model is None else a_model
+			
+		elif np.argmax(curr_skill) in grab_idxs:
+			# Grab the block
+			a = self.policy_grab(state, env_goal, curr_skill) if self.action_wise_expert_assist['grab:{}'.format(
+				obj_of_interest)] or a_model is None else a_model
+			
+		else:
+			# Drop the block
+			a = self.policy_drop(state, env_goal, curr_skill) if self.action_wise_expert_assist['drop:{}'.format(
+				obj_of_interest)] or a_model is None else a_model
+		
+		return a
+	
+	def sample_curr_skill(self, state, env_goal, prev_skill):
+		"""
+		Generic function to sample the current skill
+		"""
+		
+		# get the delta between the gripper and the object for all objects -> new variable for each object
+		delta_objs = {}
+		_offset = 3 + self.num_objects*3
+		for i in range(self.num_objects):
+			delta_objs[i] = state[_offset + i*3: _offset + (i+1)*3]
+			
+		# get the delta between the gripper and the goal for all objects -> new variable for each object
+		delta_goals = {}
+		_offset = 3
+		for i in range(self.num_objects):
+			delta_goals[i] = env_goal[i*3: (i+1)*3] - state[_offset + i*3: _offset + (i+1)*3]
+			
+		pick_idxs = [i*3 for i in range(self.num_objects)]
+		grab_idxs = [i*3 + 1 for i in range(self.num_objects)]
+		drop_idxs = [i*3 + 2 for i in range(self.num_objects)]
+		
+		obj_of_interest = np.argmax(prev_skill) // 3
+		curr_skill = np.zeros(shape=(self.num_objects * 3,), dtype=np.int64)
+		
+		# Cond1: If previous skill was pick object (for any object)
+		if np.argmax(prev_skill) in pick_idxs:
+			# If gripper is not close to object, then keep picking object else transition to grab object
+			if np.linalg.norm(delta_objs[obj_of_interest] + np.array([0, 0, 0.03])) < 0.01:
+				# Transition to grab object
+				curr_skill[obj_of_interest * 3 + 1] = 1
+			else:
+				curr_skill = prev_skill
+				
+		# Cond2: If previous skill was grab object (for any object)
+		elif np.argmax(prev_skill) in grab_idxs:
+			# If gripper is not close to object, then keep grabbing object else transition to drop object
+			if np.linalg.norm(delta_objs[obj_of_interest]) < 0.005:
+				# Transition to drop object
+				curr_skill[obj_of_interest * 3 + 2] = 1
+			else:
+				curr_skill = prev_skill
+				
+		# Cond3: If previous skill was drop object (for any object except the last object)
+		elif np.argmax(prev_skill) in drop_idxs[:-1]:
+			# If gripper is not close to goal, then keep dropping object else transition to pick object
+			if np.linalg.norm(delta_goals[obj_of_interest]) < 0.01:
+				# Transition to pick of next object
+				curr_skill[(obj_of_interest + 1) * 3] = 1
+			else:
+				curr_skill = prev_skill
+				
+		# Cond4: If previous skill was drop object (for the last object)
+		else:
+			# Stay in drop skill
+			curr_skill = prev_skill
+	
+		return np.cast[np.float32](curr_skill)
+	
+	
+	def act(self, state, env_goal, prev_goal, prev_skill, epsilon=0.0, stddev=0.0):
+		state, env_goal, prev_goal, prev_skill = state[0], env_goal[0], prev_goal[0], prev_skill[0]
+		state, env_goal, prev_goal, prev_skill = state.numpy(), env_goal.numpy(), prev_goal.numpy(), prev_skill.numpy()
+		
+		# Determine the current goal to achieve
+		curr_goal = env_goal
+		
+		# Determine the current skill to execute
+		curr_skill = self.sample_curr_skill(state, env_goal, prev_skill)
+		
+		# Execute the current skill
+		curr_action = self.sample_action(state, env_goal, curr_skill)
+		
+		# Convert np arrays to tensorflow tensor with shape (1,-1)
+		curr_goal = tf.convert_to_tensor(curr_goal.reshape(1, -1), dtype=tf.float32)
+		curr_skill = tf.convert_to_tensor(curr_skill.reshape(1, -1), dtype=tf.int32)
+		curr_action = tf.convert_to_tensor(curr_action.reshape(1, -1), dtype=tf.float32)
+		return curr_goal, curr_skill, curr_action
+	
+	def sample_curr_goal(self, state, prev_goal, for_expert=True):
+		raise NotImplementedError
+	
+	def reset(self, init_state, env_goal):
+		self.curr_gripper_raise_iters: List[int] = [copy.deepcopy(self.max_gripper_raise_iters) for _ in range(self.num_objects)]
+		if self.args.expert_behaviour == '0':
+			# Fixed order of objects i.e. 0 -> 1 -> 2 -> so on based on self.num_objects
+			self.obj_order = np.arange(self.num_objects)
+		elif self.args.expert_behaviour == '1':
+			self.obj_order = np.random.permutation(self.num_objects)
+		else:
+			raise NotImplementedError
+	
+	def get_init_skill(self):
+		"""
+		Initial skill always corresponds to pick object 'id' as specified in self.obj_order
+		:return: Initial skill (with 1 at the index corresponding to the object to be picked)
+		"""
+		
+		skill = np.zeros(shape=(self.num_objects * 3,), dtype=np.int64)
+		skill[self.obj_order[0] * len(self.skill_types)] = 1
 		# Convert to tf tensor
 		skill = tf.convert_to_tensor(skill, dtype=tf.float32)
 		skill = tf.reshape(skill, shape=(1, -1))

@@ -3,21 +3,8 @@ import logging
 from typing import Tuple
 
 import numpy as np
-import tensorflow as tf
 
 logger = logging.getLogger(__name__)
-
-OBJ_MAPPING = {
-	'0': 0,
-	'1': 1,
-	'-1': 2,  # Use when no object is left to be picked up
-}
-
-SKILL_MAPPING = {
-	'pick': 0,  # Go with open gripper (should be capable of going anywhere just by conditioning on goal)
-	'grab': 1,  # Grab the object gradually by closing th gripper (condition only on object's position)
-	'drop': 2  # Go with closed gripper (should be capable of going anywhere just by conditioning on goal)
-}
 
 
 def Step(observation, reward, done, **kwargs):
@@ -32,19 +19,23 @@ def Step(observation, reward, done, **kwargs):
 
 class PnPEnv(object):
 	def __init__(self, full_space_as_goal=False, goal_weight=1., distance_threshold=0.05, feasible_hand=True,
-				 two_obj=False, first_in_place=False, stacking=False, target_in_the_air=True, fix_goal=False,
+				 num_objs=1, first_in_place=False, stacking=False, fix_goal=False,
 				 fix_object=False):
 		"""
 			Pick and Place Environment: can be single or multi-object
 		"""
 		
-		if not two_obj:
+		if num_objs == 1:
 			from .Fetch_Base.fetch_env_oneobj import FetchPickAndPlaceEnv
 			env = FetchPickAndPlaceEnv(distance_threshold=distance_threshold, fix_object=fix_object, fix_goal=fix_goal)
-		else:
+		elif num_objs == 2:
 			from .Fetch_Base.fetch_env_twoobj import FetchPickAndPlaceEnv
-			env = FetchPickAndPlaceEnv(stacking=stacking, first_in_place=first_in_place,
-									   target_in_the_air=target_in_the_air, distance_threshold=distance_threshold)
+			env = FetchPickAndPlaceEnv(stacking=stacking, first_in_place=first_in_place, distance_threshold=distance_threshold)
+		elif num_objs == 3:
+			from .Fetch_Base.fetch_env_threeobj import FetchPickAndPlaceEnv
+			env = FetchPickAndPlaceEnv(stacking=stacking, first_in_place=first_in_place, distance_threshold=distance_threshold)
+		else:
+			raise NotImplementedError("Number of objects not supported: Need to implement the environment xml file")
 		
 		env.unwrapped.spec = self
 		self._env = env
@@ -56,15 +47,12 @@ class PnPEnv(object):
 		self.goal_weight = goal_weight
 		self.distance_threshold = distance_threshold
 		self.full_space_as_goal = full_space_as_goal
-		self.two_obj = two_obj
+		self.num_objs = num_objs
 		
 		self.feasible_hand = feasible_hand  # if the position of the hand is always feasible to achieve
 		
-		if two_obj:
-			self.latent_dim = 3
-		else:
-			self.latent_dim = 3
-	
+		# Effective latent dimension: Corresponding to pick, grab and drop
+		self.latent_dim = 3
 	
 	def sample_hand_pos(self, block_pos):
 		if block_pos[2] == self._env.height_offset or not self.feasible_hand:
@@ -118,37 +106,30 @@ class PnPEnv(object):
 		if self.full_space_as_goal:
 			self._current_goal = np.concatenate([self.sample_hand_pos(self._current_goal), self._current_goal])
 	
-	
 	def get_current_obs(self):
 		"""
 		:return: current observation (state of the robot)
 		"""
 		return self._transform_obs(self._env._get_obs()['observation'])
 	
-	
 	def _transform_obs(self, obs):
 		"""
 			Extract the relevant information from the observation
 		"""
-		if self.two_obj:
-			return obs[:16]
-		else:
-			return obs[:10]
-		
-		
+		# Gripper pos + obj. pos(s) + obj. rel. pos(s) + gripper state
+		rel_dims = 3 + 3 * self.num_objs + 3 * self.num_objs + 1
+		return obs[:rel_dims]
+	
 	def transform_to_goal_space(self, obs):
 		"""
 			Transform the observation to the goal space by extracting the achieved goal from the observation
 			For the PnP, it corresponds to obj. positions
 		"""
-		if not self.full_space_as_goal:
-			ret = np.array(obs[3:6])
+		if self.full_space_as_goal:
+			ret = np.array(obs[:3 + 3 * self.num_objs])
 		else:
-			ret = np.array(obs[:6])
-		if self.two_obj:
-			ret = np.concatenate([ret, obs[6:9]])
+			ret = np.array(obs[3:3 + 3 * self.num_objs])
 		return ret
-	
 	
 	def step(self, action):
 		next_obs, reward, _, info = self._env.step(
@@ -163,7 +144,6 @@ class PnPEnv(object):
 		# print("PnPEnv: {}/{}".format(info['distance'], self.distance_threshold))
 		done = info['goal_reached']
 		return Step(next_obs, reward, done, **info)
-	
 	
 	@property
 	def observation_space(self):
@@ -263,5 +243,3 @@ class MyPnPEnvWrapper(PnPEnv):
 	def _random_action(self, n):
 		action_max = float(super(MyPnPEnvWrapper, self).action_space.high[0])
 		return np.random.uniform(low=-action_max, high=action_max, size=(n, 4))
-
-

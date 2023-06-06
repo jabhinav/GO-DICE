@@ -52,6 +52,8 @@ class FetchEnv(robot_env.RobotEnv):
 
         self.stacking = stacking
         self.first_in_place = first_in_place
+        
+        print("Model path: ", model_path)
 
         super(FetchEnv, self).__init__(
             model_path=model_path, n_substeps=n_substeps, n_actions=4,
@@ -281,8 +283,7 @@ class FetchEnv(robot_env.RobotEnv):
 
 
 class FetchPickAndPlaceEnv(FetchEnv, gym_utils.EzPickle):
-    def __init__(self, reward_type='sparse', stacking=False, target_in_the_air=True, first_in_place=False,
-                 distance_threshold=0.01):
+    def __init__(self, reward_type='sparse', stacking=False, first_in_place=False, distance_threshold=0.01):
 
         # Define the initial positions of all the env elements. The object's pos will be later changed
         initial_qpos = {
@@ -294,7 +295,7 @@ class FetchPickAndPlaceEnv(FetchEnv, gym_utils.EzPickle):
         }
         FetchEnv.__init__(
             self, MODEL_XML_PATH, has_object=True, block_gripper=False, n_substeps=20,
-            gripper_extra_height=0.2, target_in_the_air=target_in_the_air, target_offset=0.0,
+            gripper_extra_height=0.2, target_in_the_air=False, target_offset=0.0,
             obj_range=0.15, target_range=0.15, distance_threshold=distance_threshold,
             initial_qpos=initial_qpos, reward_type=reward_type, stacking=stacking, first_in_place=first_in_place)
         gym_utils.EzPickle.__init__(self)
