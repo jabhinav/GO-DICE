@@ -1,0 +1,87 @@
+10/17/2022 16:23:54 - INFO - __main__ -   ################## Working on Model: "optionBC" ##################
+10/17/2022 16:23:54 - INFO - __main__ -   ---------------------------------------------------------------------------------------------
+10/17/2022 16:23:54 - INFO - __main__ -   {
+    "a_dim": "4",
+    "action_max": "1.0",
+    "buffer_size": "1000000",
+    "c_dim": "3",
+    "clip_norm": "5.0",
+    "clip_obs": "200.0",
+    "dir_data": "./pnp_data",
+    "dir_param": "./logging/20221017-162354/models",
+    "dir_plot": "./logging/20221017-162354/plots",
+    "dir_root_log": "./logging/20221017-162354",
+    "dir_summary": "./logging/20221017-162354/summary",
+    "dir_test": "./finetuned_models",
+    "do_eval": "False",
+    "do_pretrain": "False",
+    "do_train": "True",
+    "env_name": "OpenAIPickandPlace",
+    "eps_norm": "0.01",
+    "eval_demos": "5",
+    "expert_batch_size": "256",
+    "expert_behaviour": "0",
+    "expert_demos": "100",
+    "full_space_as_goal": "False",
+    "future_gamma": "0.1",
+    "g_dim": "6",
+    "grad_norm_clip": "1.0",
+    "horizon": "125",
+    "kl_coeff": "0.01",
+    "log_interval": "-1",
+    "model": "optionBC",
+    "n_batches": "50",
+    "num_epochs": "1000",
+    "num_options": "3",
+    "perc_train": "0.9",
+    "rollout_terminate": "True",
+    "s_dim": "16",
+    "stacking": "False",
+    "target_in_the_air": "False",
+    "temp_decay": "0.0005",
+    "temp_max": "10",
+    "temp_min": "0.01",
+    "test_demos": "10",
+    "train_demos": "90",
+    "train_trans_style": "random",
+    "two_object": "True",
+    "underflow_eps": "1e-20",
+    "use_norm": "False",
+    "vae_lr": "0.001",
+    "val_batch_size": "10",
+    "val_demos": "10",
+    "val_trans_style": "all"
+}
+10/17/2022 16:23:55 - INFO - models.optionBC -   Loading Expert Demos from ./pnp_data/two_obj_0_train.pkl into TrainBuffer for training.
+10/17/2022 16:23:55 - INFO - her.replay_buffer -   Loaded 90 episodes into the buffer.
+10/17/2022 16:23:55 - INFO - models.optionBC -   Loading Expert Demos from ./pnp_data/two_obj_0_val.pkl into ValBuffer for validation.
+10/17/2022 16:23:55 - INFO - her.replay_buffer -   Loaded 10 episodes into the buffer.
+10/17/2022 16:23:55 - INFO - models.optionBC -   Loading policy_0
+10/17/2022 16:23:55 - INFO - models.optionBC -   Policy Weights Loaded from ./pretrained_models/models_bestPolicy_two_obj_0/policyOptionBC_0.h5
+10/17/2022 16:23:55 - INFO - models.optionBC -   Loading policy_1
+10/17/2022 16:23:55 - INFO - models.optionBC -   Policy Weights Loaded from ./pretrained_models/models_bestPolicy_two_obj_0/policyOptionBC_1.h5
+10/17/2022 16:23:55 - INFO - models.optionBC -   Loading policy_2
+10/17/2022 16:23:55 - INFO - models.optionBC -   Policy Weights Loaded from ./pretrained_models/models_bestPolicy_two_obj_0/policyOptionBC_2.h5
+10/17/2022 16:23:55 - INFO - models.optionBC -   Training .......
+10/17/2022 16:23:59 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.3571586608886719) at epoch: 0
+10/17/2022 16:24:00 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.2179032564163208) at epoch: 1
+10/17/2022 16:24:01 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.204561710357666) at epoch: 2
+10/17/2022 16:24:02 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.0960372686386108) at epoch: 4
+10/17/2022 16:24:03 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.45908331871032715) at epoch: 5
+10/17/2022 16:24:04 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.453849732875824) at epoch: 8
+10/17/2022 16:24:07 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.42335498332977295) at epoch: 12
+10/17/2022 16:24:07 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.40456536412239075) at epoch: 13
+10/17/2022 16:24:08 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.3477952778339386) at epoch: 14
+10/17/2022 16:24:09 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.33313071727752686) at epoch: 15
+10/17/2022 16:24:09 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.3280690908432007) at epoch: 16
+10/17/2022 16:24:10 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.2875160872936249) at epoch: 17
+10/17/2022 16:24:11 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.2719441056251526) at epoch: 18
+10/17/2022 16:24:11 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.23845919966697693) at epoch: 19
+10/17/2022 16:24:14 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.19798624515533447) at epoch: 23
+10/17/2022 16:24:22 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.1714925765991211) at epoch: 34
+10/17/2022 16:24:29 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.1650608777999878) at epoch: 45
+10/17/2022 16:24:50 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.16488401591777802) at epoch: 74
+10/17/2022 16:25:07 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.1624850183725357) at epoch: 94
+10/17/2022 16:25:22 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.1623091697692871) at epoch: 116
+10/17/2022 16:25:24 - INFO - models.optionBC -   Saving the best model (best action_loss: 0.16148200631141663) at epoch: 119
+10/17/2022 16:32:54 - INFO - models.optionBC -   Done Training in 0:08:59.112943

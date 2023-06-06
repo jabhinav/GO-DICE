@@ -1,0 +1,98 @@
+11/04/2022 13:17:57 - INFO - __main__ -   ################## Working on Model: "optionBC" ##################
+11/04/2022 13:17:57 - INFO - __main__ -   ---------------------------------------------------------------------------------------------
+11/04/2022 13:17:57 - INFO - __main__ -   {
+    "a_dim": "4",
+    "action_max": "1.0",
+    "ae_loss_weight": "1.0",
+    "ag_dim": "3",
+    "buffer_size": "1000000",
+    "c_dim": "3",
+    "clip_norm": "5.0",
+    "clip_obs": "200.0",
+    "dir_data": "./pnp_data",
+    "dir_param": "./logging/VerifyOptions20221104-131757/models",
+    "dir_plot": "./logging/VerifyOptions20221104-131757/plots",
+    "dir_root_log": "./logging/VerifyOptions20221104-131757",
+    "dir_summary": "./logging/VerifyOptions20221104-131757/summary",
+    "dir_test": "./finetuned_models",
+    "disc_loss_weight": "1.0",
+    "do_adversarial_train": "True",
+    "do_eval": "False",
+    "do_pretrain": "False",
+    "do_train": "True",
+    "env_name": "OpenAIPickandPlace",
+    "eps_norm": "0.01",
+    "eval_demos": "5",
+    "expert_batch_size": "256",
+    "expert_behaviour": "0",
+    "expert_demos": "100",
+    "full_space_as_goal": "False",
+    "future_gamma": "0.1",
+    "g_dim": "6",
+    "gen_loss_weight": "1.0",
+    "grad_norm_clip": "1.0",
+    "horizon": "125",
+    "kl_coeff": "0.0",
+    "log_interval": "-1",
+    "model": "optionBC",
+    "n_batches": "50",
+    "num_epochs": "300",
+    "num_options": "3",
+    "perc_train": "0.9",
+    "rollout_terminate": "True",
+    "s_dim": "16",
+    "stacking": "False",
+    "target_in_the_air": "False",
+    "temp_decay": "0.0005",
+    "temp_max": "10",
+    "temp_min": "0.01",
+    "test_demos": "5",
+    "train_demos": "90",
+    "train_trans_style": "random",
+    "two_object": "True",
+    "underflow_eps": "1e-20",
+    "use_norm": "False",
+    "vae_lr": "0.001",
+    "val_batch_size": "10",
+    "val_demos": "10",
+    "val_trans_style": "all"
+}
+11/04/2022 13:17:57 - INFO - __main__ -   ################## Verifying ##################
+11/04/2022 13:17:57 - INFO - verify -   Loading Expert Demos from ./pnp_data/two_obj_0_train.pkl into TrainBuffer for training.
+11/04/2022 13:17:57 - INFO - her.replay_buffer -   Loaded 90 episodes into the buffer.
+11/04/2022 13:17:57 - INFO - verify -   Loading Expert Demos from ./pnp_data/two_obj_0_val.pkl into ValBuffer for validation.
+11/04/2022 13:17:57 - INFO - her.replay_buffer -   Loaded 10 episodes into the buffer.
+11/04/2022 13:17:58 - INFO - verify -   Loading Model Weights from ./finetuned_models/models_bestGoal_two_obj_0
+11/04/2022 13:17:58 - INFO - models.optionBC -   Loaded Goal Predictor Weights from ./finetuned_models/models_bestGoal_two_obj_0/goalPredOptionBC.h5
+11/04/2022 13:17:58 - INFO - models.optionBC -   Loading policy_0
+11/04/2022 13:17:58 - INFO - models.optionBC -   Policy Weights Loaded from ./finetuned_models/models_bestGoal_two_obj_0/policyOptionBC_0.h5
+11/04/2022 13:17:58 - INFO - models.optionBC -   Loading policy_1
+11/04/2022 13:17:58 - INFO - models.optionBC -   Policy Weights Loaded from ./finetuned_models/models_bestGoal_two_obj_0/policyOptionBC_1.h5
+11/04/2022 13:17:58 - INFO - models.optionBC -   Loading policy_2
+11/04/2022 13:17:58 - INFO - models.optionBC -   Policy Weights Loaded from ./finetuned_models/models_bestGoal_two_obj_0/policyOptionBC_2.h5
+11/04/2022 13:17:58 - INFO - verify -   Testing Demo 0
+11/04/2022 13:18:01 - INFO - verify -   [Goal+SkillPred with Expert Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:01 - INFO - verify -   [Goal+SkillPred with Expert Policy] Expert Latent Modes: [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+11/04/2022 13:18:01 - INFO - verify -   [Goal+SkillPred with Expert Policy] Episode Latent Mode Prediction Accuracy: 0.184
+11/04/2022 13:18:09 - INFO - verify -   [Goal+SkillPred with Options Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:09 - INFO - verify -   Testing Demo 1
+11/04/2022 13:18:11 - INFO - verify -   [Goal+SkillPred with Expert Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:11 - INFO - verify -   [Goal+SkillPred with Expert Policy] Expert Latent Modes: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+11/04/2022 13:18:11 - INFO - verify -   [Goal+SkillPred with Expert Policy] Episode Latent Mode Prediction Accuracy: 0.184
+11/04/2022 13:18:17 - INFO - verify -   [Goal+SkillPred with Options Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:18 - INFO - verify -   Testing Demo 2
+11/04/2022 13:18:20 - INFO - verify -   [Goal+SkillPred with Expert Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:20 - INFO - verify -   [Goal+SkillPred with Expert Policy] Expert Latent Modes: [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+11/04/2022 13:18:20 - INFO - verify -   [Goal+SkillPred with Expert Policy] Episode Latent Mode Prediction Accuracy: 0.168
+11/04/2022 13:18:26 - INFO - verify -   [Goal+SkillPred with Options Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:26 - INFO - verify -   Testing Demo 3
+11/04/2022 13:18:29 - INFO - verify -   [Goal+SkillPred with Expert Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:29 - INFO - verify -   [Goal+SkillPred with Expert Policy] Expert Latent Modes: [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+11/04/2022 13:18:29 - INFO - verify -   [Goal+SkillPred with Expert Policy] Episode Latent Mode Prediction Accuracy: 0.184
+11/04/2022 13:18:35 - INFO - verify -   [Goal+SkillPred with Options Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:35 - INFO - verify -   Testing Demo 4
+11/04/2022 13:18:37 - INFO - verify -   [Goal+SkillPred with Expert Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:37 - INFO - verify -   [Goal+SkillPred with Expert Policy] Expert Latent Modes: [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+11/04/2022 13:18:37 - INFO - verify -   [Goal+SkillPred with Expert Policy] Episode Latent Mode Prediction Accuracy: 0.176
+11/04/2022 13:18:44 - INFO - verify -   [Goal+SkillPred with Options Policy] Predicted Latent Modes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+11/04/2022 13:18:44 - INFO - verify -   [Goal+SkillPred with Expert Policy] Average Latent Mode Prediction Accuracy: 0.17919999999999997

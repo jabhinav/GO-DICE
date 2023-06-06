@@ -1,0 +1,163 @@
+10/04/2022 14:04:18 - INFO - __main__ -   ################## Working on Model: "optionBC" ##################
+10/04/2022 14:04:18 - INFO - __main__ -   ---------------------------------------------------------------------------------------------
+10/04/2022 14:04:18 - INFO - __main__ -   {
+    "a_dim": "4",
+    "action_max": "1.0",
+    "ag_dim": "3",
+    "alpha_dim": "2",
+    "buffer_size": "1000000",
+    "c_dim": "3",
+    "clip_norm": "5.0",
+    "clip_obs": "200.0",
+    "dir_data": "./pnp_data",
+    "dir_param": "./logging/20221004-140418/models",
+    "dir_plot": "./logging/20221004-140418/plots",
+    "dir_root_log": "./logging/20221004-140418",
+    "dir_summary": "./logging/20221004-140418/summary",
+    "dir_test": "",
+    "do_eval": "False",
+    "do_train": "True",
+    "do_verify": "False",
+    "env_name": "OpenAIPickandPlace",
+    "eps_norm": "0.01",
+    "eval_demos": "5",
+    "expert_batch_size": "256",
+    "expert_behaviour": "0",
+    "expert_demos": "100",
+    "full_space_as_goal": "False",
+    "future_gamma": "0.1",
+    "g_coeff": "10.0",
+    "g_dim": "3",
+    "horizon": "50",
+    "log_interval": "-1",
+    "n_batches": "50",
+    "num_epochs": "1000",
+    "perc_train": "0.9",
+    "rollout_terminate": "True",
+    "s_dim": "10",
+    "stacking": "False",
+    "target_in_the_air": "False",
+    "testModel": "models_bestPolicy",
+    "test_demos": "5",
+    "two_object": "False",
+    "underflow_eps": "1e-20",
+    "use_norm": "False",
+    "vae_lr": "0.001",
+    "z_dim": "1"
+}
+10/04/2022 14:04:18 - INFO - models.optionBC -   Loading Expert Demos from ./pnp_data/single_obj_train.pkl into TrainBuffer for training.
+10/04/2022 14:04:18 - INFO - her.replay_buffer -   Loaded 90 episodes into the buffer.
+10/04/2022 14:04:18 - INFO - models.optionBC -   Loading Expert Demos from ./pnp_data/single_obj_val.pkl into ValBuffer for validation.
+10/04/2022 14:04:18 - INFO - her.replay_buffer -   Loaded 10 episodes into the buffer.
+10/04/2022 14:04:18 - INFO - models.optionBC -   Pre-Training .......
+10/04/2022 14:04:22 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.10449723899364471) after epoch: 0
+10/04/2022 14:04:22 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.006862047594040632) after epoch: 0
+10/04/2022 14:04:22 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.17267799377441406) after epoch: 0
+10/04/2022 14:04:24 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.032122209668159485) after epoch: 1
+10/04/2022 14:04:24 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.005350466817617416) after epoch: 1
+10/04/2022 14:04:24 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.1295274943113327) after epoch: 1
+10/04/2022 14:04:26 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.022245269268751144) after epoch: 2
+10/04/2022 14:04:26 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.00465377327054739) after epoch: 2
+10/04/2022 14:04:26 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.09827864170074463) after epoch: 2
+10/04/2022 14:04:27 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.016234099864959717) after epoch: 3
+10/04/2022 14:04:27 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.004288921132683754) after epoch: 3
+10/04/2022 14:04:27 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.08673524111509323) after epoch: 3
+10/04/2022 14:04:29 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.009351026266813278) after epoch: 4
+10/04/2022 14:04:29 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.0037069469690322876) after epoch: 4
+10/04/2022 14:04:29 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.05896369740366936) after epoch: 4
+10/04/2022 14:04:31 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.005021681543439627) after epoch: 5
+10/04/2022 14:04:31 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.0030272435396909714) after epoch: 5
+10/04/2022 14:04:31 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.04346111789345741) after epoch: 5
+10/04/2022 14:04:32 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0029846772085875273) after epoch: 6
+10/04/2022 14:04:32 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.0017491868929937482) after epoch: 6
+10/04/2022 14:04:32 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.021921919658780098) after epoch: 6
+10/04/2022 14:04:34 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0026044812984764576) after epoch: 7
+10/04/2022 14:04:34 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.001393127255141735) after epoch: 7
+10/04/2022 14:04:34 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.014198984950780869) after epoch: 7
+10/04/2022 14:04:36 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0017833164893090725) after epoch: 8
+10/04/2022 14:04:36 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.0005865106359124184) after epoch: 8
+10/04/2022 14:04:36 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.010950830765068531) after epoch: 8
+10/04/2022 14:04:37 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.00031273014610633254) after epoch: 9
+10/04/2022 14:04:37 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.008227083832025528) after epoch: 9
+10/04/2022 14:04:39 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.00025714258663356304) after epoch: 10
+10/04/2022 14:04:39 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.005114592146128416) after epoch: 10
+10/04/2022 14:04:41 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0013941640499979258) after epoch: 11
+10/04/2022 14:04:41 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.00016494834562763572) after epoch: 11
+10/04/2022 14:04:41 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.004541391506791115) after epoch: 11
+10/04/2022 14:04:44 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0012480575824156404) after epoch: 13
+10/04/2022 14:04:46 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 0.00016178886289708316) after epoch: 14
+10/04/2022 14:04:47 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 6.330900941975415e-05) after epoch: 15
+10/04/2022 14:04:47 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.004147599451243877) after epoch: 15
+10/04/2022 14:04:49 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0011318454053252935) after epoch: 16
+10/04/2022 14:04:49 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 5.3313502576202154e-05) after epoch: 16
+10/04/2022 14:04:51 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0011041671968996525) after epoch: 17
+10/04/2022 14:04:52 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0008666787762194872) after epoch: 18
+10/04/2022 14:04:52 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 4.93500629090704e-05) after epoch: 18
+10/04/2022 14:04:54 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 4.0624763641972095e-05) after epoch: 19
+10/04/2022 14:04:54 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0031891879625618458) after epoch: 19
+10/04/2022 14:04:56 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0030778057407587767) after epoch: 20
+10/04/2022 14:04:57 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 3.906735219061375e-05) after epoch: 21
+10/04/2022 14:04:59 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0007365182973444462) after epoch: 22
+10/04/2022 14:05:09 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0005748835392296314) after epoch: 28
+10/04/2022 14:05:09 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0027770353481173515) after epoch: 28
+10/04/2022 14:05:12 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0027659444604068995) after epoch: 30
+10/04/2022 14:05:14 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.002257691230624914) after epoch: 31
+10/04/2022 14:05:24 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0003828200278803706) after epoch: 37
+10/04/2022 14:05:34 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 3.8547041185665876e-05) after epoch: 43
+10/04/2022 14:05:41 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.00025044422363862395) after epoch: 47
+10/04/2022 14:05:41 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 1.9793926185229793e-05) after epoch: 47
+10/04/2022 14:05:47 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0002159731520805508) after epoch: 51
+10/04/2022 14:06:04 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.00013618392404168844) after epoch: 61
+10/04/2022 14:06:06 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 0.0001070906437234953) after epoch: 62
+10/04/2022 14:06:09 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 1.9292578144813888e-05) after epoch: 64
+10/04/2022 14:06:16 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.002094130264595151) after epoch: 68
+10/04/2022 14:06:31 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 6.960815517231822e-05) after epoch: 77
+10/04/2022 14:06:46 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 1.7524525901535526e-05) after epoch: 86
+10/04/2022 14:07:00 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0019488222897052765) after epoch: 94
+10/04/2022 14:07:07 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 1.615668588783592e-05) after epoch: 98
+10/04/2022 14:07:12 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 1.1341900972183794e-05) after epoch: 101
+10/04/2022 14:07:12 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0015742892865091562) after epoch: 101
+10/04/2022 14:07:22 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 5.876456270925701e-05) after epoch: 107
+10/04/2022 14:07:23 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0014642351306974888) after epoch: 108
+10/04/2022 14:07:40 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 1.0883668437600136e-05) after epoch: 118
+10/04/2022 14:07:48 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0013173972256481647) after epoch: 123
+10/04/2022 14:08:05 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 1.003673423838336e-05) after epoch: 133
+10/04/2022 14:09:10 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0012955418787896633) after epoch: 172
+10/04/2022 14:09:17 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 8.529254046152346e-06) after epoch: 176
+10/04/2022 14:09:20 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 5.6112054153345525e-05) after epoch: 178
+10/04/2022 14:09:27 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0012406561290845275) after epoch: 182
+10/04/2022 14:09:35 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0011967446189373732) after epoch: 187
+10/04/2022 14:09:37 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.001176291611045599) after epoch: 188
+10/04/2022 14:09:50 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0010272962972521782) after epoch: 196
+10/04/2022 14:09:55 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 5.411551319411956e-05) after epoch: 199
+10/04/2022 14:09:57 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0009766749572008848) after epoch: 200
+10/04/2022 14:10:09 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 6.388168003468309e-06) after epoch: 207
+10/04/2022 14:10:25 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 5.316663737175986e-05) after epoch: 217
+10/04/2022 14:10:47 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0009401700226590037) after epoch: 230
+10/04/2022 14:11:01 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 4.3263426050543785e-06) after epoch: 238
+10/04/2022 14:11:04 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 4.27923532697605e-06) after epoch: 240
+10/04/2022 14:11:11 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.000928038265556097) after epoch: 244
+10/04/2022 14:11:39 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 4.778991569764912e-05) after epoch: 260
+10/04/2022 14:11:42 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0008929059840738773) after epoch: 262
+10/04/2022 14:11:50 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 3.987616946687922e-05) after epoch: 266
+10/04/2022 14:11:55 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 4.018302206532098e-06) after epoch: 269
+10/04/2022 14:12:29 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0008737039752304554) after epoch: 289
+10/04/2022 14:12:48 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 3.6755540349986404e-05) after epoch: 300
+10/04/2022 14:13:00 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 3.528238812577911e-05) after epoch: 307
+10/04/2022 14:13:03 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 3.7394622722786153e-06) after epoch: 309
+10/04/2022 14:13:08 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0007498678169213235) after epoch: 312
+10/04/2022 14:13:27 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0007302672020159662) after epoch: 323
+10/04/2022 14:14:19 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 3.2425472454633564e-05) after epoch: 353
+10/04/2022 14:14:25 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 3.6578144317900296e-06) after epoch: 357
+10/04/2022 14:14:55 - INFO - models.optionBC -   [POLICY_0] Saving the best model (best loss: 2.3242460883921012e-05) after epoch: 375
+10/04/2022 14:15:32 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 3.5834066238749074e-06) after epoch: 397
+10/04/2022 14:15:57 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 3.562690380931599e-06) after epoch: 412
+10/04/2022 14:16:04 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 3.5291436688567046e-06) after epoch: 416
+10/04/2022 14:16:07 - INFO - models.optionBC -   [POLICY_1] Saving the best model (best loss: 3.011775788763771e-06) after epoch: 418
+10/04/2022 14:16:10 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0006992433336563408) after epoch: 420
+10/04/2022 14:17:47 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0006836781976744533) after epoch: 478
+10/04/2022 14:19:45 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0006626074318774045) after epoch: 548
+10/04/2022 14:20:25 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.000661492464132607) after epoch: 572
+10/04/2022 14:21:19 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0006121236365288496) after epoch: 604
+10/04/2022 14:25:41 - INFO - models.optionBC -   [POLICY_2] Saving the best model (best loss: 0.0005371732404455543) after epoch: 761
+10/04/2022 14:32:19 - INFO - models.optionBC -   Done Pre-Training in 0:28:01.055068

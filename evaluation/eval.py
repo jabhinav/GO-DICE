@@ -8,7 +8,7 @@ from tqdm import tqdm
 from domains.stackBoxWorld import _find, stackBoxWorld
 from utils.misc import causally_parse_dynamic_data_v2, one_hot_encode
 from tensorflow_probability.python.distributions import Categorical, Normal
-from utils.vae import multi_sample_normal_np, multi_sample_normal_tf
+from utils.sample import multi_sample_normal_np, multi_sample_normal_tf
 
 
 def get_index_of_all_max(preds):

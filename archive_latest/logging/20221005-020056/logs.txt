@@ -1,0 +1,54 @@
+10/05/2022 02:00:56 - INFO - __main__ -   ################## Working on Model: "gBC" ##################
+10/05/2022 02:00:56 - INFO - __main__ -   ---------------------------------------------------------------------------------------------
+10/05/2022 02:00:56 - INFO - __main__ -   {
+    "a_dim": "4",
+    "action_max": "1.0",
+    "ag_dim": "3",
+    "alpha_dim": "2",
+    "buffer_size": "1000000",
+    "c_dim": "3",
+    "clip_norm": "5.0",
+    "clip_obs": "200.0",
+    "dir_data": "./pnp_data",
+    "dir_param": "./logging/20221005-020056/models",
+    "dir_plot": "./logging/20221005-020056/plots",
+    "dir_root_log": "./logging/20221005-020056",
+    "dir_summary": "./logging/20221005-020056/summary",
+    "dir_test": "./finetuned_models",
+    "do_eval": "False",
+    "do_train": "True",
+    "do_verify": "False",
+    "env_name": "OpenAIPickandPlace",
+    "eps_norm": "0.01",
+    "eval_demos": "5",
+    "expert_batch_size": "256",
+    "expert_behaviour": "0",
+    "expert_demos": "100",
+    "full_space_as_goal": "False",
+    "future_gamma": "0.1",
+    "g_coeff": "10.0",
+    "g_dim": "3",
+    "horizon": "50",
+    "log_interval": "-1",
+    "model": "gBC",
+    "n_batches": "50",
+    "num_epochs": "1000",
+    "perc_train": "0.9",
+    "rollout_terminate": "True",
+    "s_dim": "10",
+    "stacking": "False",
+    "target_in_the_air": "False",
+    "test_demos": "5",
+    "two_object": "False",
+    "underflow_eps": "1e-20",
+    "use_norm": "False",
+    "vae_lr": "0.001",
+    "z_dim": "1"
+}
+10/05/2022 02:00:56 - INFO - __main__ -   ################## Verifying ##################
+10/05/2022 02:00:57 - INFO - verify -   Loading Expert Demos from ./pnp_data/single_obj_train.pkl into TrainBuffer for training.
+10/05/2022 02:00:57 - INFO - her.replay_buffer -   Loaded 90 episodes into the buffer.
+10/05/2022 02:00:57 - INFO - verify -   Loading Expert Demos from ./pnp_data/single_obj_val.pkl into ValBuffer for validation.
+10/05/2022 02:00:57 - INFO - her.replay_buffer -   Loaded 10 episodes into the buffer.
+10/05/2022 02:00:57 - INFO - verify -   Loading Model Weights from ./finetuned_models/models_bestPolicy
+10/05/2022 02:00:57 - INFO - models.gBC -   Models Loaded from ./finetuned_models/models_bestPolicy/goalPred_gBC.h5 and ./finetuned_models/models_bestPolicy/policy_gBC.h5

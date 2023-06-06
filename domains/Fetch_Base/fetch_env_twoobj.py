@@ -52,6 +52,8 @@ class FetchEnv(robot_env.RobotEnv):
 
         self.stacking = stacking
         self.first_in_place = first_in_place
+        
+        print("Model path: ", model_path)
 
         super(FetchEnv, self).__init__(
             model_path=model_path, n_substeps=n_substeps, n_actions=4,
@@ -157,7 +159,7 @@ class FetchEnv(robot_env.RobotEnv):
     def _reset_sim(self):
         self.sim.set_state(self.initial_state)
 
-        # Randomize start position of object.
+        # Randomize start position of the objects.
         if self.has_object:
             object_xpos = object_xpos1 = self.initial_gripper_xpos[:2]
             while np.linalg.norm(object_xpos - self.initial_gripper_xpos[:2]) < 0.1 or np.linalg.norm(object_xpos1 - self.initial_gripper_xpos[:2]) < 0.1:
@@ -168,7 +170,6 @@ class FetchEnv(robot_env.RobotEnv):
             assert object_qpos.shape == (7,)
             object_qpos[:2] = object_xpos
             object_qpos1[:2] = object_xpos1
-
             self.sim.data.set_joint_qpos('object0:joint', object_qpos)
             self.sim.data.set_joint_qpos('object1:joint', object_qpos1)
 
@@ -251,6 +252,7 @@ class FetchEnv(robot_env.RobotEnv):
             goal = np.concatenate([goal0, goal1])
         else:
             goal = self.initial_gripper_xpos[:3] + self.np_random.uniform(-0.15, 0.15, size=3)
+        
         return goal.copy()
 
     def _is_success(self, achieved_goal, desired_goal):
@@ -281,7 +283,7 @@ class FetchEnv(robot_env.RobotEnv):
 
 
 class FetchPickAndPlaceEnv(FetchEnv, gym_utils.EzPickle):
-    def __init__(self, reward_type='sparse', stacking=False, target_in_the_air=True, first_in_place=False):
+    def __init__(self, reward_type='sparse', stacking=False, first_in_place=False, distance_threshold=0.01):
 
         # Define the initial positions of all the env elements. The object's pos will be later changed
         initial_qpos = {
@@ -293,7 +295,7 @@ class FetchPickAndPlaceEnv(FetchEnv, gym_utils.EzPickle):
         }
         FetchEnv.__init__(
             self, MODEL_XML_PATH, has_object=True, block_gripper=False, n_substeps=20,
-            gripper_extra_height=0.2, target_in_the_air=target_in_the_air, target_offset=0.0,
-            obj_range=0.15, target_range=0.15, distance_threshold=0.01,
+            gripper_extra_height=0.2, target_in_the_air=False, target_offset=0.0,
+            obj_range=0.15, target_range=0.15, distance_threshold=distance_threshold,
             initial_qpos=initial_qpos, reward_type=reward_type, stacking=stacking, first_in_place=first_in_place)
         gym_utils.EzPickle.__init__(self)

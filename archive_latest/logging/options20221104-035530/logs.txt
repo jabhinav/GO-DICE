@@ -1,0 +1,83 @@
+11/04/2022 03:55:30 - INFO - __main__ -   ################## Working on Model: "optionBC" ##################
+11/04/2022 03:55:30 - INFO - __main__ -   ---------------------------------------------------------------------------------------------
+11/04/2022 03:55:30 - INFO - __main__ -   {
+    "a_dim": "4",
+    "action_max": "1.0",
+    "ae_loss_weight": "1.0",
+    "ag_dim": "3",
+    "buffer_size": "1000000",
+    "c_dim": "3",
+    "clip_norm": "5.0",
+    "clip_obs": "200.0",
+    "dir_data": "./pnp_data",
+    "dir_param": "./logging/options20221104-035530/models",
+    "dir_plot": "./logging/options20221104-035530/plots",
+    "dir_root_log": "./logging/options20221104-035530",
+    "dir_summary": "./logging/options20221104-035530/summary",
+    "dir_test": "./finetuned_models",
+    "disc_loss_weight": "1.0",
+    "do_adversarial_train": "True",
+    "do_eval": "False",
+    "do_pretrain": "False",
+    "do_train": "True",
+    "env_name": "OpenAIPickandPlace",
+    "eps_norm": "0.01",
+    "eval_demos": "5",
+    "expert_batch_size": "256",
+    "expert_behaviour": "0",
+    "expert_demos": "100",
+    "full_space_as_goal": "False",
+    "future_gamma": "0.1",
+    "g_dim": "6",
+    "gen_loss_weight": "1.0",
+    "grad_norm_clip": "1.0",
+    "horizon": "125",
+    "kl_coeff": "0.0",
+    "log_interval": "-1",
+    "model": "optionBC",
+    "n_batches": "50",
+    "num_epochs": "300",
+    "num_options": "3",
+    "perc_train": "0.9",
+    "rollout_terminate": "True",
+    "s_dim": "16",
+    "stacking": "False",
+    "target_in_the_air": "False",
+    "temp_decay": "0.0005",
+    "temp_max": "10",
+    "temp_min": "0.01",
+    "test_demos": "10",
+    "train_demos": "90",
+    "train_trans_style": "random",
+    "two_object": "True",
+    "underflow_eps": "1e-20",
+    "use_norm": "False",
+    "vae_lr": "0.001",
+    "val_batch_size": "10",
+    "val_demos": "10",
+    "val_trans_style": "all"
+}
+11/04/2022 03:55:30 - INFO - models.optionBC -   Loading Expert Demos from ./pnp_data/two_obj_0_train.pkl into TrainBuffer for training.
+11/04/2022 03:55:31 - INFO - her.replay_buffer -   Loaded 90 episodes into the buffer.
+11/04/2022 03:55:31 - INFO - models.optionBC -   Loading Expert Demos from ./pnp_data/two_obj_0_val.pkl into ValBuffer for validation.
+11/04/2022 03:55:31 - INFO - her.replay_buffer -   Loaded 10 episodes into the buffer.
+11/04/2022 03:55:31 - INFO - models.optionBC -   Loading policy_0
+11/04/2022 03:55:31 - INFO - models.optionBC -   Policy Weights Loaded from ./pretrained_models/models_bestPolicy_two_obj_0/policyOptionBC_0.h5
+11/04/2022 03:55:31 - INFO - models.optionBC -   Loading policy_1
+11/04/2022 03:55:31 - INFO - models.optionBC -   Policy Weights Loaded from ./pretrained_models/models_bestPolicy_two_obj_0/policyOptionBC_1.h5
+11/04/2022 03:55:31 - INFO - models.optionBC -   Loading policy_2
+11/04/2022 03:55:31 - INFO - models.optionBC -   Policy Weights Loaded from ./pretrained_models/models_bestPolicy_two_obj_0/policyOptionBC_2.h5
+11/04/2022 03:55:31 - INFO - models.optionBC -   Training .......
+11/04/2022 03:55:35 - WARNING - tensorflow -   Gradients do not exist for variables ['gc_encoder/dense_17/kernel:0', 'gc_encoder/dense_17/bias:0', 'gc_encoder/dense_18/kernel:0', 'gc_encoder/dense_18/bias:0'] when minimizing the loss. If you're using `model.compile()`, did you forget to provide a `loss` argument?
+11/04/2022 03:55:35 - WARNING - tensorflow -   Gradients do not exist for variables ['gc_encoder/dense_17/kernel:0', 'gc_encoder/dense_17/bias:0', 'gc_encoder/dense_18/kernel:0', 'gc_encoder/dense_18/bias:0'] when minimizing the loss. If you're using `model.compile()`, did you forget to provide a `loss` argument?
+11/04/2022 03:55:38 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.6741491556167603) at epoch: 0
+11/04/2022 03:55:40 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.2233357429504395) at epoch: 1
+11/04/2022 03:55:42 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.094598412513733) at epoch: 2
+11/04/2022 03:55:57 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.071588397026062) at epoch: 10
+11/04/2022 03:55:59 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.060797095298767) at epoch: 11
+11/04/2022 03:56:31 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.0475578308105469) at epoch: 28
+11/04/2022 03:56:44 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.0457690954208374) at epoch: 35
+11/04/2022 03:58:43 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.0336414575576782) at epoch: 98
+11/04/2022 03:59:03 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.0325452089309692) at epoch: 109
+11/04/2022 04:01:35 - INFO - models.optionBC -   Saving the best model (best action_loss: 1.032455325126648) at epoch: 190
+11/04/2022 04:04:58 - INFO - models.optionBC -   Done Training in 0:09:27.561710
