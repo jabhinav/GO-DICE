@@ -245,6 +245,13 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 				action = tf.expand_dims(action, axis=0)
 			
 			action = tf.clip_by_value(action, -self.args.action_max, self.args.action_max)
+
+		# Safety check for action, should not be nan or inf
+		has_nan = tf.math.reduce_any(tf.math.is_nan(action))
+		has_inf = tf.math.reduce_any(tf.math.is_inf(action))
+		if has_nan or has_inf:
+			logger.warning('Action has nan or inf. Setting action to zero. Action: {}'.format(action))
+			action = tf.zeros_like(action)
 		
 		return curr_goal, curr_skill, action
 	
@@ -323,7 +330,7 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 			skill = tf.one_hot(0, self.args.c_dim, dtype=tf.float32)
 		
 		elif self.args.num_objs == 2:
-			if self.args.expert_behaviour == 0:
+			if self.args.expert_behaviour == '0':
 				skill = tf.one_hot(0, self.args.c_dim, dtype=tf.float32)  # Pick Object 0 first (default)
 			#
 			# elif self.args.expert_behaviour == 1:

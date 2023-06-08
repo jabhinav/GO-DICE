@@ -118,9 +118,9 @@ def run(args):
 				fig_path=os.path.join(args.dir_root_log, 'Expert_{}_{}.png'.format(data_type, n)),
 				y_label='Metrics', x_label='Steps'
 			)
-			path_to_init_state_dict = tf.constant(os.path.join(env_state_dir, 'env_{}.pkl'.format(n)))
-			with open(path_to_init_state_dict.numpy(), 'wb') as handle:
-				pickle.dump(exp_stats['init_state_dict'], handle, protocol=pickle.HIGHEST_PROTOCOL)
+			# path_to_init_state_dict = tf.constant(os.path.join(env_state_dir, 'env_{}.pkl'.format(n)))
+			# with open(path_to_init_state_dict.numpy(), 'wb') as handle:
+			# 	pickle.dump(exp_stats['init_state_dict'], handle, protocol=pickle.HIGHEST_PROTOCOL)
 			n += 1
 	
 	expert_buffer.save_buffer_data(data_path)
@@ -131,7 +131,7 @@ def run(args):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--num_demos', type=int, default=2)
+	parser.add_argument('--num_demos', type=int, default=10)
 	parser.add_argument('--split_tag', type=str, default='train')
 	parser.add_argument('--render', type=bool, default=True)
 	
@@ -152,7 +152,7 @@ if __name__ == '__main__':
 	
 	# Specify Rollout Data Configuration
 	parser.add_argument('--horizon', type=int, default=200,
-						help='Set 100 for one_obj, 150 for two_obj and 200 for three_obj')
+						help='Set 150 for one_obj, 150 for two_obj and 200 for three_obj')
 	parser.add_argument('--rollout_terminate', type=bool, default=False,
 						help='We retain the success flag=1 for states which satisfy goal condition,')
 	parser.add_argument('--buffer_size', type=int, default=int(1e6),

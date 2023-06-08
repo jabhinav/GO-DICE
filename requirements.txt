@@ -4,8 +4,9 @@ scipy
 matplotlib
 tqdm
 keras
-gym
 pybasicbayes
-mujoco-py
-tf_agents
+mujoco
+tf_agents==0.15.0
 wandb
+gymnasium
+tensorflow-probability==0.20.1

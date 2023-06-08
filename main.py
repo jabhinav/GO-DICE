@@ -181,8 +181,8 @@ def run(db: bool, algo: str):
 
 
 if __name__ == "__main__":
-	num_runs = 5
+	num_runs = 1
 	for i in range(num_runs):
-		run(db=False, algo='SkilledDemoDICE')
+		run(db=True, algo='SkilledDemoDICE')
 	# verify(algo='GoFar')
 

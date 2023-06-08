@@ -1,11 +1,20 @@
 import os
+
 import numpy as np
-from gym import utils as gym_utils
-from gym.envs.robotics import rotations, robot_env, utils
+from gymnasium.utils.ezpickle import EzPickle
+from gymnasium_robotics.envs.robot_env import MujocoRobotEnv
+from gymnasium_robotics.utils import rotations
 
 
 # Ensure we get the path separator correct on windows
 MODEL_XML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'asset', 'fetch', 'pick_and_place_twoobj.xml')
+
+DEFAULT_CAMERA_CONFIG = {
+    "distance": 2.5,
+    "azimuth": 132.0,
+    "elevation": -14.0,
+    "lookat": np.array([1.3, 0.75, 0.55]),
+}
 
 
 def goal_distance(goal_a, goal_b):
@@ -13,7 +22,7 @@ def goal_distance(goal_a, goal_b):
     return np.linalg.norm(goal_a - goal_b, axis=-1)
 
 
-class FetchEnv(robot_env.RobotEnv):
+class FetchEnv(MujocoRobotEnv):
     """Superclass for all Fetch environments. One object PnP uses built-in FetchEnv from gym.envs.robotics
     """
 
@@ -51,13 +60,19 @@ class FetchEnv(robot_env.RobotEnv):
         self.reward_type = reward_type
 
         self.stacking = stacking
+        self.stack_height_offset = 0.05  # TODO: figure out if it's .025 or .05 (0.025 not working, goals too close)
         self.first_in_place = first_in_place
         
         print("Model path: ", model_path)
 
         super(FetchEnv, self).__init__(
-            model_path=model_path, n_substeps=n_substeps, n_actions=4,
-            initial_qpos=initial_qpos)
+            default_camera_config=DEFAULT_CAMERA_CONFIG,
+            model_path=model_path,
+            n_substeps=n_substeps,
+            n_actions=4,
+            initial_qpos=initial_qpos,
+            # render_mode="human",  # Uncommenting it will use the in-built rendering (unintended)
+        )
 
     # GoalEnv methods
     # ----------------------------
@@ -74,18 +89,34 @@ class FetchEnv(robot_env.RobotEnv):
     # ----------------------------
 
     def _step_callback(self):
+        # if self.block_gripper:
+        #     self.sim.data.set_joint_qpos("robot0:l_gripper_finger_joint", 0.0)
+        #     self.sim.data.set_joint_qpos("robot0:r_gripper_finger_joint", 0.0)
+        #     self.sim.forward()
+
         if self.block_gripper:
-            self.sim.data.set_joint_qpos('robot0:l_gripper_finger_joint', 0.)
-            self.sim.data.set_joint_qpos('robot0:r_gripper_finger_joint', 0.)
-            self.sim.forward()
+            self._utils.set_joint_qpos(
+                self.model, self.data, "robot0:l_gripper_finger_joint", 0.0
+            )
+            self._utils.set_joint_qpos(
+                self.model, self.data, "robot0:r_gripper_finger_joint", 0.0
+            )
+            self._mujoco.mj_forward(self.model, self.data)
 
     def _set_action(self, action):
         assert action.shape == (4,)
-        action = action.copy()  # ensure that we don't change the action outside of this scope
+        action = (
+            action.copy()
+        )  # ensure that we don't change the action outside of this scope
         pos_ctrl, gripper_ctrl = action[:3], action[3]
 
         pos_ctrl *= 0.05  # limit maximum change in position
-        rot_ctrl = [1., 0., 1., 0.]  # fixed rotation of the end effector, expressed as a quaternion
+        rot_ctrl = [
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+        ]  # fixed rotation of the end effector, expressed as a quaternion
         gripper_ctrl = np.array([gripper_ctrl, gripper_ctrl])
         assert gripper_ctrl.shape == (2,)
         if self.block_gripper:
@@ -93,43 +124,114 @@ class FetchEnv(robot_env.RobotEnv):
         action = np.concatenate([pos_ctrl, rot_ctrl, gripper_ctrl])
 
         # Apply action to simulation.
-        utils.ctrl_set_action(self.sim, action)
-        utils.mocap_set_action(self.sim, action)
+        self._utils.ctrl_set_action(self.model, self.data, action)
+        self._utils.mocap_set_action(self.model, self.data, action)
 
     def _get_obs(self):
         # positions
-        grip_pos = self.sim.data.get_site_xpos('robot0:grip')
-        dt = self.sim.nsubsteps * self.sim.model.opt.timestep
-        grip_velp = self.sim.data.get_site_xvelp('robot0:grip') * dt
-        robot_qpos, robot_qvel = utils.robot_get_obs(self.sim)
+        # grip_pos = self.sim.data.get_site_xpos('robot0:grip')
+        # dt = self.sim.nsubsteps * self.sim.model.opt.timestep
+        # grip_velp = self.sim.data.get_site_xvelp('robot0:grip') * dt
+        # robot_qpos, robot_qvel = utils.robot_get_obs(self.sim)
+        # if self.has_object:
+        #     object1_pos = self.sim.data.get_site_xpos('object0')
+        #     object2_pos = self.sim.data.get_site_xpos('object1')
+        #     # rotations
+        #     object_rot = rotations.mat2euler(self.sim.data.get_site_xmat('object0'))
+        #     object_rot1 = rotations.mat2euler(self.sim.data.get_site_xmat('object1'))
+        #     # velocities
+        #     object1_velp = self.sim.data.get_site_xvelp('object0') * dt
+        #     object_velr = self.sim.data.get_site_xvelr('object0') * dt
+        #     object2_velp = self.sim.data.get_site_xvelp('object1') * dt
+        #     object_velr1 = self.sim.data.get_site_xvelr('object1') * dt
+        #     # gripper state
+        #     object1_rel_pos = object1_pos - grip_pos
+        #     object1_velp -= grip_velp
+        #     object2_rel_pos = object2_pos - grip_pos
+        #     object2_velp -= grip_velp
+        # else:
+        #     object1_pos = object_rot = object1_velp = object_velr = object1_rel_pos = np.zeros(0)
+        # gripper_state = robot_qpos[-2:]
+        # gripper_vel = robot_qvel[-2:] * dt  # change to a scalar if the gripper is made symmetric
+        #
+        # if not self.has_object:
+        #     achieved_goal = grip_pos.copy()
+        # else:
+        #     achieved_goal = np.concatenate([np.squeeze(object1_pos.copy()), np.squeeze(object2_pos.copy())])
+        # obs = np.concatenate([
+        #     grip_pos, object1_pos.ravel(), object2_pos.ravel(), object1_rel_pos.ravel(), object2_rel_pos.ravel(),
+        #     gripper_state, object_rot.ravel(), object1_velp.ravel(), object_velr.ravel(), grip_velp, gripper_vel,
+        # ])
+
+        grip_pos = self._utils.get_site_xpos(self.model, self.data, "robot0:grip")
+        dt = self.n_substeps * self.model.opt.timestep
+        grip_velp = (
+                self._utils.get_site_xvelp(self.model, self.data, "robot0:grip") * dt
+        )
+
+        robot_qpos, robot_qvel = self._utils.robot_get_obs(
+            self.model, self.data, self._model_names.joint_names
+        )
         if self.has_object:
-            object1_pos = self.sim.data.get_site_xpos('object0')
-            object2_pos = self.sim.data.get_site_xpos('object1')
+            object1_pos = self._utils.get_site_xpos(self.model, self.data, "object0")
+            object2_pos = self._utils.get_site_xpos(self.model, self.data, "object1")
+
             # rotations
-            object_rot = rotations.mat2euler(self.sim.data.get_site_xmat('object0'))
-            object_rot1 = rotations.mat2euler(self.sim.data.get_site_xmat('object1'))
+            object1_rot = rotations.mat2euler(
+                self._utils.get_site_xmat(self.model, self.data, "object0")
+            )
+            object2_rot = rotations.mat2euler(
+                self._utils.get_site_xmat(self.model, self.data, "object1")
+            )
+
             # velocities
-            object1_velp = self.sim.data.get_site_xvelp('object0') * dt
-            object_velr = self.sim.data.get_site_xvelr('object0') * dt
-            object2_velp = self.sim.data.get_site_xvelp('object1') * dt
-            object_velr1 = self.sim.data.get_site_xvelr('object1') * dt
+            object1_velp = (
+                    self._utils.get_site_xvelp(self.model, self.data, "object0") * dt
+            )
+            object1_velr = (
+                    self._utils.get_site_xvelr(self.model, self.data, "object0") * dt
+            )
+            object2_velp = (
+                    self._utils.get_site_xvelp(self.model, self.data, "object1") * dt
+            )
+            object2_velr = (
+                    self._utils.get_site_xvelr(self.model, self.data, "object1") * dt
+            )
+
             # gripper state
             object1_rel_pos = object1_pos - grip_pos
             object1_velp -= grip_velp
             object2_rel_pos = object2_pos - grip_pos
             object2_velp -= grip_velp
         else:
-            object1_pos = object_rot = object1_velp = object_velr = object1_rel_pos = np.zeros(0)
+            object1_pos = object1_rot = object1_velp = object1_velr = object1_rel_pos = np.zeros(0)
+            object2_pos = object2_rot = object2_velp = object2_velr = object2_rel_pos = np.zeros(0)
+
         gripper_state = robot_qpos[-2:]
-        gripper_vel = robot_qvel[-2:] * dt  # change to a scalar if the gripper is made symmetric
+
+        gripper_vel = (
+                robot_qvel[-2:] * dt
+        )  # change to a scalar if the gripper is made symmetric
 
         if not self.has_object:
             achieved_goal = grip_pos.copy()
         else:
             achieved_goal = np.concatenate([np.squeeze(object1_pos.copy()), np.squeeze(object2_pos.copy())])
         obs = np.concatenate([
-            grip_pos, object1_pos.ravel(), object2_pos.ravel(), object1_rel_pos.ravel(), object2_rel_pos.ravel(),
-            gripper_state, object_rot.ravel(), object1_velp.ravel(), object_velr.ravel(), grip_velp, gripper_vel,
+            grip_pos,
+            object1_pos.ravel(),
+            object2_pos.ravel(),
+            object1_rel_pos.ravel(),
+            object2_rel_pos.ravel(),
+            gripper_state,
+            object1_rot.ravel(),
+            object1_velp.ravel(),
+            object1_velr.ravel(),
+            object2_rot.ravel(),
+            object2_velp.ravel(),
+            object2_velr.ravel(),
+            grip_velp,
+            gripper_vel,
         ])
 
         return {
@@ -138,74 +240,112 @@ class FetchEnv(robot_env.RobotEnv):
             'desired_goal': self.goal.copy(),
         }
 
-    def _viewer_setup(self):
-        body_id = self.sim.model.body_name2id('robot0:gripper_link')
-        lookat = self.sim.data.body_xpos[body_id]
-        for idx, value in enumerate(lookat):
-            self.viewer.cam.lookat[idx] = value
-        self.viewer.cam.distance = 2.5
-        self.viewer.cam.azimuth = 132.
-        self.viewer.cam.elevation = -14.
+    def _get_gripper_xpos(self):
+        body_id = self._model_names.body_name2id["robot0:gripper_link"]
+        return self.data.xpos[body_id]
 
     def _render_callback(self):
+        # # Visualize target.
+        # sites_offset = (self.sim.data.site_xpos - self.sim.model.site_pos).copy()
+        # site_id = self.sim.model.site_name2id('target0')
+        # site_id1 = self.sim.model.site_name2id('target1')
+        # self.sim.model.site_pos[site_id] = self.goal[:3] - sites_offset[0]
+        # self.sim.model.site_pos[site_id1] = self.goal[3:6] - sites_offset[0]
+        # self.sim.forward()
+
         # Visualize target.
-        sites_offset = (self.sim.data.site_xpos - self.sim.model.site_pos).copy()
-        site_id = self.sim.model.site_name2id('target0')
-        site_id1 = self.sim.model.site_name2id('target1')
-        self.sim.model.site_pos[site_id] = self.goal[:3] - sites_offset[0]
-        self.sim.model.site_pos[site_id1] = self.goal[3:6] - sites_offset[0]
-        self.sim.forward()
+        sites_offset = (self.data.site_xpos - self.model.site_pos).copy()
+        site_id = self._mujoco.mj_name2id(
+            self.model, self._mujoco.mjtObj.mjOBJ_SITE, "target0"
+        )
+        site_id1 = self._mujoco.mj_name2id(
+            self.model, self._mujoco.mjtObj.mjOBJ_SITE, "target1"
+        )
+        self.model.site_pos[site_id] = self.goal[:3] - sites_offset[0]
+        self.model.site_pos[site_id1] = self.goal[3:6] - sites_offset[0]
+        self._mujoco.mj_forward(self.model, self.data)
 
     def _reset_sim(self):
-        self.sim.set_state(self.initial_state)
+        # self.sim.set_state(self.initial_state)
 
-        # Randomize start position of the objects.
+        # # Randomize start position of the objects.
+        # if self.has_object:
+        #     object_xpos = object_xpos1 = self.initial_gripper_xpos[:2]
+        #     while np.linalg.norm(object_xpos - self.initial_gripper_xpos[:2]) < 0.1 or np.linalg.norm(object_xpos1 - self.initial_gripper_xpos[:2]) < 0.1:
+        #         object_xpos = self.initial_gripper_xpos[:2] + self.np_random.uniform(-self.obj_range, self.obj_range, size=2)
+        #         object_xpos1 = self.initial_gripper_xpos[:2] + self.np_random.uniform(-self.obj_range, self.obj_range, size=2)
+        #     object_qpos = self.sim.data.get_joint_qpos('object0:joint')
+        #     object_qpos1 = self.sim.data.get_joint_qpos('object1:joint')
+        #     assert object_qpos.shape == (7,)
+        #     object_qpos[:2] = object_xpos
+        #     object_qpos1[:2] = object_xpos1
+        #     self.sim.data.set_joint_qpos('object0:joint', object_qpos)
+        #     self.sim.data.set_joint_qpos('object1:joint', object_qpos1)
+        #
+        # self.sim.forward()
+        # return True
+
+        self.data.time = self.initial_time
+        self.data.qpos[:] = np.copy(self.initial_qpos)
+        self.data.qvel[:] = np.copy(self.initial_qvel)
+        if self.model.na != 0:
+            self.data.act[:] = None
+
+        # Randomize start position of object.
         if self.has_object:
             object_xpos = object_xpos1 = self.initial_gripper_xpos[:2]
             while np.linalg.norm(object_xpos - self.initial_gripper_xpos[:2]) < 0.1 or np.linalg.norm(object_xpos1 - self.initial_gripper_xpos[:2]) < 0.1:
-                object_xpos = self.initial_gripper_xpos[:2] + self.np_random.uniform(-self.obj_range, self.obj_range, size=2)
-                object_xpos1 = self.initial_gripper_xpos[:2] + self.np_random.uniform(-self.obj_range, self.obj_range, size=2)
-            object_qpos = self.sim.data.get_joint_qpos('object0:joint')
-            object_qpos1 = self.sim.data.get_joint_qpos('object1:joint')
+                object_xpos = self.initial_gripper_xpos[:2] + self.np_random.uniform(
+                    -self.obj_range, self.obj_range, size=2
+                )
+                object_xpos1 = self.initial_gripper_xpos[:2] + self.np_random.uniform(
+                    -self.obj_range, self.obj_range, size=2
+                )
+            object_qpos = self._utils.get_joint_qpos(self.model, self.data, "object0:joint")
+            object_qpos1 = self._utils.get_joint_qpos(self.model, self.data, "object1:joint")
             assert object_qpos.shape == (7,)
             object_qpos[:2] = object_xpos
             object_qpos1[:2] = object_xpos1
-            self.sim.data.set_joint_qpos('object0:joint', object_qpos)
-            self.sim.data.set_joint_qpos('object1:joint', object_qpos1)
+            self._utils.set_joint_qpos(self.model, self.data, "object0:joint", object_qpos)
+            self._utils.set_joint_qpos(self.model, self.data, "object1:joint", object_qpos1)
 
-        self.sim.forward()
+        self._mujoco.mj_forward(self.model, self.data)
         return True
 
     def forced_reset(self, state_dict):
     
-        # Set State
-        initial_state = state_dict['state']
-        self.sim.set_state(initial_state)
-        self.sim.forward()
-    
-        # Set Goal
-        self.goal = state_dict['goal']
-        obs = self._get_obs()
-        return obs
+        # # Set State
+        # initial_state = state_dict['state']
+        # self.sim.set_state(initial_state)
+        # self.sim.forward()
+        #
+        # # Set Goal
+        # self.goal = state_dict['goal']
+        # obs = self._get_obs()
+        # return obs
+        raise NotImplementedError
 
     def get_state_dict(self):
-        state = self.sim.get_state()
-        goal = self.goal
-        return {
-            'state': state,
-            'goal': goal
-        }
+        # state = self.sim.get_state()
+        # goal = self.goal
+        # return {
+        #     'state': state,
+        #     'goal': goal
+        # }
+        raise NotImplementedError
 
     def _sample_goal(self):
+
         if self.has_object:
 
-            object_qpos = self.sim.data.get_joint_qpos('object0:joint')[:3]
-            object_qpos1 = self.sim.data.get_joint_qpos('object1:joint')[:3]
+            object_qpos = self._utils.get_joint_qpos(self.model, self.data, "object0:joint")[:3]
+            object_qpos1 = self._utils.get_joint_qpos(self.model, self.data, "object1:joint")[:3]
 
             # the first object is always on the table
             if not self.first_in_place:
-                goal0 = self.initial_gripper_xpos[:3] + self.np_random.uniform(-self.target_range, self.target_range,
-                                                                               size=3)
+                goal0 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+                    -self.target_range, self.target_range, size=3
+                )
                 goal0 += self.target_offset
                 goal0[2] = self.height_offset
 
@@ -220,23 +360,24 @@ class FetchEnv(robot_env.RobotEnv):
                     goal0[2] = self.height_offset
 
             else:
-                goal0 = self.sim.data.get_site_xpos('object0')  # the first block is already in place!
+                goal0 = self._utils.get_site_xpos(self.model, self.data,  'object0')  # first block is already in place!
 
             if not self.stacking:
-                goal1 = self.initial_gripper_xpos[:3] + self.np_random.uniform(-self.target_range,
-                                                                               self.target_range,
-                                                                               size=3)
+                goal1 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+                    -self.target_range, self.target_range, size=3
+                )
                 goal1 += self.target_offset
                 goal1[2] = self.height_offset
 
                 # ----------- Cond 2: To make the second goal sufficiently far from first goal and objects ------------
-                while np.linalg.norm(goal0-goal1) < 0.1 or \
-                        np.linalg.norm(goal1 - object_qpos) < 0.1 or np.linalg.norm(goal1 - object_qpos1) < 0.1:
+                while np.linalg.norm(goal0 - goal1) < 0.1 or \
+                        np.linalg.norm(goal1 - object_qpos) < 0.1 or \
+                        np.linalg.norm(goal1 - object_qpos1) < 0.1:
 
                     # print("Cond2: resampling the goal1")
-                    goal1 = self.initial_gripper_xpos[:3] + self.np_random.uniform(-self.target_range,
-                                                                                   self.target_range,
-                                                                                   size=3)
+                    goal1 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+                        -self.target_range, self.target_range, size=3
+                    )
                     goal1 += self.target_offset
                     goal1[2] = self.height_offset
 
@@ -247,12 +388,18 @@ class FetchEnv(robot_env.RobotEnv):
             # [HERE] Set goals for stacking
             else:
                 goal1 = np.copy(goal0)
-                goal1[2] = goal0[2] + 0.05  # TODO: figure out if it's .025 or .05 (0.025 not working, goals too close)
+                goal1[2] = goal0[2] + self.stack_height_offset
 
             goal = np.concatenate([goal0, goal1])
         else:
-            goal = self.initial_gripper_xpos[:3] + self.np_random.uniform(-0.15, 0.15, size=3)
-        
+            goal0 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+                -self.target_range, self.target_range, size=3
+            )
+            goal1 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+                -self.target_range, self.target_range, size=3
+            )
+            goal = np.concatenate([goal0, goal1])
+
         return goal.copy()
 
     def _is_success(self, achieved_goal, desired_goal):
@@ -260,29 +407,51 @@ class FetchEnv(robot_env.RobotEnv):
         return (d < self.distance_threshold).astype(np.float32)
 
     def _env_setup(self, initial_qpos):
+        # for name, value in initial_qpos.items():
+        #     self.sim.data.set_joint_qpos(name, value)
+        # utils.reset_mocap_welds(self.sim)
+        # self.sim.forward()
+        #
+        # # Move end effector into position.
+        # gripper_target = np.array([-0.498, 0.005, -0.431 + self.gripper_extra_height]) + self.sim.data.get_site_xpos('robot0:grip')
+        # gripper_rotation = np.array([1., 0., 1., 0.])
+        # self.sim.data.set_mocap_pos('robot0:mocap', gripper_target)
+        # self.sim.data.set_mocap_quat('robot0:mocap', gripper_rotation)
+        # for _ in range(10):
+        #     self.sim.step()
+        #
+        # # Extract information for sampling goals.
+        # self.initial_gripper_xpos = self.sim.data.get_site_xpos('robot0:grip').copy()
+        # if self.has_object:
+        #     self.height_offset = self.sim.data.get_site_xpos('object0')[2]
+
         for name, value in initial_qpos.items():
-            self.sim.data.set_joint_qpos(name, value)
-        utils.reset_mocap_welds(self.sim)
-        self.sim.forward()
+            self._utils.set_joint_qpos(self.model, self.data, name, value)
+        self._utils.reset_mocap_welds(self.model, self.data)
+        self._mujoco.mj_forward(self.model, self.data)
 
         # Move end effector into position.
-        gripper_target = np.array([-0.498, 0.005, -0.431 + self.gripper_extra_height]) + self.sim.data.get_site_xpos('robot0:grip')
-        gripper_rotation = np.array([1., 0., 1., 0.])
-        self.sim.data.set_mocap_pos('robot0:mocap', gripper_target)
-        self.sim.data.set_mocap_quat('robot0:mocap', gripper_rotation)
+        gripper_target = np.array(
+            [-0.498, 0.005, -0.431 + self.gripper_extra_height]
+        ) + self._utils.get_site_xpos(self.model, self.data, "robot0:grip")
+        gripper_rotation = np.array([1.0, 0.0, 1.0, 0.0])
+        self._utils.set_mocap_pos(self.model, self.data, "robot0:mocap", gripper_target)
+        self._utils.set_mocap_quat(self.model, self.data, "robot0:mocap", gripper_rotation)
         for _ in range(10):
-            self.sim.step()
+            self._mujoco.mj_step(self.model, self.data, nstep=self.n_substeps)
 
         # Extract information for sampling goals.
-        self.initial_gripper_xpos = self.sim.data.get_site_xpos('robot0:grip').copy()
+        self.initial_gripper_xpos = self._utils.get_site_xpos(self.model, self.data, "robot0:grip").copy()
         if self.has_object:
-            self.height_offset = self.sim.data.get_site_xpos('object0')[2]
+            self.height_offset = self._utils.get_site_xpos(self.model, self.data, "object0")[2]
 
-    def render(self, mode='human', width=500, height=500):
-        return super(FetchEnv, self).render(mode, width, height)
+    def render(self, mode="human", width=500, height=500):
+        """Overrides the render method to support rendering with control."""
+        self._render_callback()
+        return self.mujoco_renderer.render(mode)
 
 
-class FetchPickAndPlaceEnv(FetchEnv, gym_utils.EzPickle):
+class FetchPickAndPlaceEnv(FetchEnv, EzPickle):
     def __init__(self, reward_type='sparse', stacking=False, first_in_place=False, distance_threshold=0.01):
 
         # Define the initial positions of all the env elements. The object's pos will be later changed
@@ -298,4 +467,4 @@ class FetchPickAndPlaceEnv(FetchEnv, gym_utils.EzPickle):
             gripper_extra_height=0.2, target_in_the_air=False, target_offset=0.0,
             obj_range=0.15, target_range=0.15, distance_threshold=distance_threshold,
             initial_qpos=initial_qpos, reward_type=reward_type, stacking=stacking, first_in_place=first_in_place)
-        gym_utils.EzPickle.__init__(self)
+        EzPickle.__init__(self)
