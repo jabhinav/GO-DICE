@@ -248,18 +248,28 @@ class FetchEnv(MujocoRobotEnv):
         # Randomize start position of object.
         if self.has_object:
             object_xpos = object_xpos1 = object_xpos2 = self.initial_gripper_xpos[:2]
-            while np.linalg.norm(object_xpos - self.initial_gripper_xpos[:2]) < 0.1 \
-                    or np.linalg.norm(object_xpos1 - self.initial_gripper_xpos[:2]) < 0.1 \
-                    or np.linalg.norm(object_xpos2 - self.initial_gripper_xpos[:2]) < 0.1:
-                object_xpos = self.initial_gripper_xpos[:2] + self.np_random.uniform(
-                    -self.obj_range, self.obj_range, size=2
-                )
+
+            # New Logic: Randomize the object position with following constraints:
+            # 1. Object should be at least obj_range from the gripper
+            # 2. Object should not be at least obj_range from any other object
+
+            # Let first object be at initial gripper position
+            # (for some reason, randomising it is putting it out of the table)
+
+            while np.linalg.norm(object_xpos1 - self.initial_gripper_xpos[:2]) < 0.1 or \
+                    np.linalg.norm(object_xpos1 - object_xpos) < 0.1:
                 object_xpos1 = self.initial_gripper_xpos[:2] + self.np_random.uniform(
                     -self.obj_range, self.obj_range, size=2
                 )
+
+            while np.linalg.norm(object_xpos2 - self.initial_gripper_xpos[:2]) < 0.1 or \
+                    np.linalg.norm(object_xpos2 - object_xpos) < 0.1 or \
+                    np.linalg.norm(object_xpos2 - object_xpos1) < 0.1:
                 object_xpos2 = self.initial_gripper_xpos[:2] + self.np_random.uniform(
                     -self.obj_range, self.obj_range, size=2
                 )
+
+            # Set the object position
             object_qpos = self._utils.get_joint_qpos(self.model, self.data, "object0:joint")
             object_qpos1 = self._utils.get_joint_qpos(self.model, self.data, "object1:joint")
             object_qpos2 = self._utils.get_joint_qpos(self.model, self.data, "object2:joint")
@@ -312,8 +322,9 @@ class FetchEnv(MujocoRobotEnv):
                 goal0[2] = self.height_offset
 
                 # ---------------- Cond 1: To make goal0 sufficiently far from objects --------------------------------
-                while np.linalg.norm(goal0 - object_qpos) < 0.1 or np.linalg.norm(goal0 - object_qpos1) < 0.1 \
-                        or np.linalg.norm(goal0 - object_qpos2) < 0.1:
+                while np.linalg.norm(goal0[:2] - object_qpos[:2]) < 0.1 \
+                        or np.linalg.norm(goal0[:2] - object_qpos1[:2]) < 0.1 \
+                        or np.linalg.norm(goal0[:2] - object_qpos2[:2]) < 0.1:
                     # print("Cond1: resampling the goal0")
                     goal0 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
                         -self.target_range, self.target_range, size=3

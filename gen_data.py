@@ -63,9 +63,9 @@ def run(args):
 		data_type = f'single_obj_{args.split_tag}'
 	
 	data_path = os.path.join(args.dir_data, data_type + '.pkl')
-	env_state_dir = os.path.join(args.dir_data, f'{data_type}_env_states')
-	if not os.path.exists(env_state_dir):
-		os.makedirs(env_state_dir)
+	# env_state_dir = os.path.join(args.dir_data, f'{data_type}_env_states')
+	# if not os.path.exists(env_state_dir):
+	# 	os.makedirs(env_state_dir)
 		
 	# ############################################# EXPERT POLICY ############################################# #
 	num_skills = args.num_objs * 3
@@ -131,9 +131,9 @@ def run(args):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--num_demos', type=int, default=10)
+	parser.add_argument('--num_demos', type=int, default=100)
 	parser.add_argument('--split_tag', type=str, default='train')
-	parser.add_argument('--render', type=bool, default=True)
+	parser.add_argument('--render', type=bool, default=False)
 	
 	# Specify Environment Configuration
 	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
@@ -158,7 +158,7 @@ if __name__ == '__main__':
 	parser.add_argument('--buffer_size', type=int, default=int(1e6),
 						help='--')
 	parser.add_argument('--random_eps', type=float, default=0.0, help='random eps = 0.05')
-	parser.add_argument('--noise_eps', type=float, default=0.0, help='noise eps = 0.01')
+	parser.add_argument('--noise_eps', type=float, default=0.001, help='noise eps = 0.01')
 	
 	parser.add_argument('--wrap_skill_id', type=str, default='1', choices=['0', '1', '2'],
 						help='consumed by multi-object expert to determine how to wrap effective skills')
