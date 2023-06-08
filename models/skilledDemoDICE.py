@@ -613,8 +613,10 @@ class Agent(AgentBase):
 						}
 						
 						vit_res_off, c_off_prev, c_off_curr = self.infer_skills(data_off, c_off_curr_gt)
-						logger.info('Updating the offline buffer with the viterbi decoded '
-									'skill sequence at train step {}'.format(curr_t))
+
+						# Update the offline buffer with the viterbi decoded skill sequence
+						data_off['prev_skills'] = c_off_prev
+						data_off['curr_skills'] = c_off_curr
 						
 						# TODO: Do not update the expert episode skills stored in the offline buffer
 						# # Skip ep_idxs_exp and update ep_idxs_off - ep_idxs_exp [TEMP]
