@@ -9,4 +9,5 @@ mujoco
 tf_agents==0.15.0
 wandb
 gymnasium
+gymnasium-robotics
 tensorflow-probability==0.20.1
