@@ -9,7 +9,7 @@ import wandb
 from domains.PnP import MyPnPEnvWrapper
 from her.replay_buffer import ReplayBufferTf
 from her.rollout import RolloutWorker
-from utils.custom import evaluate_worker
+from evaluation.eval import evaluate_worker
 from utils.env import get_PnP_env
 
 logger = logging.getLogger(__name__)

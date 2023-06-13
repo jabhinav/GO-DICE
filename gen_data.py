@@ -56,9 +56,9 @@ def run(args):
 	num_objs = int(args.num_objs)
 	
 	if num_objs == 3:
-		data_type = f'three_obj_{args.expert_behaviour}_{args.wrap_skill_id}_{args.split_tag}'
+		data_type = f'three_obj_{args.expert_behaviour}_{args.split_tag}'
 	elif num_objs == 2:
-		data_type = f'two_obj_{args.expert_behaviour}_{args.wrap_skill_id}_{args.split_tag}'
+		data_type = f'two_obj_{args.expert_behaviour}_{args.split_tag}'
 	elif num_objs == 1:
 		data_type = f'single_obj_{args.split_tag}'
 	
@@ -131,27 +131,27 @@ def run(args):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--num_demos', type=int, default=2)
+	parser.add_argument('--num_demos', type=int, default=100)
 	parser.add_argument('--split_tag', type=str, default='train')
-	parser.add_argument('--render', type=bool, default=True)
+	parser.add_argument('--render', type=bool, default=False)
 	
 	# Specify Environment Configuration
 	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
 	parser.add_argument('--full_space_as_goal', type=bool, default=False)
-	parser.add_argument('--num_objs', type=int, default=3)
+	parser.add_argument('--num_objs', type=int, default=1)
 	parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0', '1'],
 						help='Expert behaviour in multi-obj env. Note that 1 is the randomised behaviour which '
 							 'wont work in the stacking env because goals are suspended in the air and reaching them '
 							 'is impossible without stacking objects below. FIX: order of goal for the objects should '
 							 'be implemented in the env first, which then must be observed by the agent.')
-	parser.add_argument('--stacking', type=bool, default=True)
+	parser.add_argument('--stacking', type=bool, default=False)
 	parser.add_argument('--fix_goal', type=bool, default=False,
 						help='[Debug] Fix the goal position for one object task')
 	parser.add_argument('--fix_object', type=bool, default=False,
 						help='[Debug] Fix the object position for one object task')
 	
 	# Specify Rollout Data Configuration
-	parser.add_argument('--horizon', type=int, default=200,
+	parser.add_argument('--horizon', type=int, default=100,
 						help='Set 100 for one_obj, 150 for two_obj and 200 for three_obj')
 	parser.add_argument('--rollout_terminate', type=bool, default=False,
 						help='We retain the success flag=1 for states which satisfy goal condition,')
@@ -159,9 +159,6 @@ if __name__ == '__main__':
 						help='--')
 	parser.add_argument('--random_eps', type=float, default=0.0, help='random eps = 0.05')
 	parser.add_argument('--noise_eps', type=float, default=0.0, help='noise eps = 0.01')
-	
-	parser.add_argument('--wrap_skill_id', type=str, default='1', choices=['0', '1', '2'],
-						help='consumed by multi-object expert to determine how to wrap effective skills')
 	
 	parser.add_argument('--dir_root_log', type=str, default=log_dir)
 	parser.add_argument('--dir_data', type=str, default='./pnp_data/study')

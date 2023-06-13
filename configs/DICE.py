@@ -1,5 +1,6 @@
 import argparse
 import os
+
 from utils.env import get_config_env
 
 
@@ -8,8 +9,8 @@ def get_DICE_args(log_dir, db=False):
 	
 	parser.add_argument('--log_wandb', type=bool, default=not db)
 	# parser.add_argument('--log_wandb', type=bool, default=False)
-	parser.add_argument('--wandb_project', type=str, default='offlineILPnPOneExp',
-						choices=['offlineILPnPOne', 'offlineILPnPOneExp'])
+	parser.add_argument('--wandb_project', type=str, default='offlineILPnPTwoExp',
+						choices=['offlineILPnPOne', 'offlineILPnPOneExp', 'offlineILPnPTwoExp'])
 	
 	parser.add_argument('--expert_demos', type=int, default=25)
 	parser.add_argument('--offline_demos', type=int, default=75)
@@ -18,17 +19,15 @@ def get_DICE_args(log_dir, db=False):
 	parser.add_argument('--test_demos', type=int, default=0, help='For Visualisation')
 	parser.add_argument('--perc_train', type=int, default=1.0)
 	
-	# # Specify Skill Configuration
-	parser.add_argument('--wrap_skill_id', type=str, default='1', choices=['0', '1', '2'],
-						help='consumed by multi-object expert to determine how to wrap effective skills')
+
 	# parser.add_argument('--temp_min', type=float, default=0.01, help='Minimum temperature for Gumbel Softmax')
 	# parser.add_argument('--temp_max', type=float, default=10, help='Maximum temperature for Gumbel Softmax')
 	# parser.add_argument('--temp_decay', type=float, default=0.0005, help='Temperature decay for Gumbel Softmax')
 	
 	# Specify Environment Configuration
 	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
-	parser.add_argument('--num_objs', type=int, default=1)
-	parser.add_argument('--horizon', type=int, default=100,
+	parser.add_argument('--num_objs', type=int, default=2)
+	parser.add_argument('--horizon', type=int, default=150,
 						help='Set 100 for one_obj, 150 for two_obj and 200 for three_obj')
 	parser.add_argument('--stacking', type=bool, default=False)
 	parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0', '1'],
@@ -39,7 +38,6 @@ def get_DICE_args(log_dir, db=False):
 	parser.add_argument('--fix_object', type=bool, default=False,
 						help='[Debugging] Fix the object position for one object task')
 	
-
 	# Specify Data Collection Configuration
 	parser.add_argument('--buffer_size', type=int, default=int(2e5),
 						help='Number of transitions to store in buffer (max_time_steps)')
@@ -49,7 +47,7 @@ def get_DICE_args(log_dir, db=False):
 						help='No. of time steps to run pretraining - actor, director on expert data. Set to 0 to skip')
 	parser.add_argument('--max_time_steps', type=int, default=10000 if not db else 100,
 						help='No. of time steps to run. Recommended 5k for one_obj, 10k for two_obj')
-	parser.add_argument('--batch_size', type=int, default=3*256,
+	parser.add_argument('--batch_size', type=int, default=6 * 256,
 						help='No. of trans to sample from buffer for each update')
 	parser.add_argument('--trans_style', type=str, default='random_unsegmented',
 						choices=['random_unsegmented', 'random_segmented'],
@@ -64,15 +62,19 @@ def get_DICE_args(log_dir, db=False):
 	# 					help='Number of steps to explore and then exploit - 2e3. For on/off-policy, only!')
 	
 	# Viterbi configuration
-	parser.add_argument('--num_skills', type=int, default=None, help='Number of skills to use for agent, if provided,'
-																	 'will override expert skill set')
-	parser.add_argument('--skill_supervision', type=str, default='semi:0.25', choices=['full', 'semi:0.25', 'none'],
+	parser.add_argument('--skill_supervision', type=str, default='full',
+						choices=['full', 'semi:0.10', 'semi:0.25', 'none'],
 						help='Type of supervision for latent skills. '
 							 'full: Use ground truth skills for offline data.'
-							 'semi: Use Viterbi to update latent skills for offline data.'
+							 'semi:x: Use Viterbi to update latent skills for offline data.'
 							 'none: Use Viterbi to update latent skills for expert and offline data.')
-	parser.add_argument('--update_skills_interval', type=int, default=1,
-						help='Number of time steps after which latent skills will be updated using Viterbi')
+	# parser.add_argument('--update_skills_interval', type=int, default=1,
+	# 					help='Number of time steps after which latent skills will be updated using Viterbi [Unused]')
+	parser.add_argument('--num_skills', type=int, default=None,
+						help='Number of skills to use for agent, if provided, will override expert skill set. '
+							 'Use when skill supervision is "none"')
+	parser.add_argument('--wrap_level', type=str, default='1', choices=['0', '1', '2'],
+						help='consumed by multi-object expert to determine how to wrap effective skills')
 	
 	# Polyak
 	parser.add_argument('--update_target_interval', type=int, default=20,
@@ -124,10 +126,19 @@ def get_DICE_args(log_dir, db=False):
 	args.train_demos = int(args.expert_demos * args.perc_train)
 	args.val_demos = args.expert_demos - args.train_demos
 	
-	# Set number of skills
-	if args.num_skills is not None:
-		if args.skill_supervision != 'none':
-			raise ValueError('Cannot specify num_skills when skill_supervision is not none')
+	# Set number of skills [For unsupervised skill learning]
+	if args.num_skills is not None and args.skill_supervision == 'none':
+		print('Overriding c_dim with specified %d skills' % args.num_skills)
 		args.c_dim = args.num_skills
+	
+	# Set number of skills [For full or semi-supervised skill learning]
+	if args.env_name == 'OpenAIPickandPlace' and args.wrap_level != '0' and args.skill_supervision != 'none':
+		print('Overriding c_dim based on %s' % args.wrap_level)
+		if args.wrap_level == '1':
+			args.c_dim = 3
+		elif args.wrap_level == '2':
+			args.c_dim = args.num_objs
+		else:
+			raise NotImplementedError('Wrap level %s not implemented' % args.wrap_level)
 	
 	return args

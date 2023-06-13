@@ -129,12 +129,21 @@ class Discriminator(tf.keras.Model):
 class Actor(tf.keras.Model):
     def __init__(self, action_dim):
         super(Actor, self).__init__()
+        # self.base = tf.keras.Sequential([
+        #     Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
+        #     Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
+        #     Dense(units=128, activation=tf.nn.relu, kernel_initializer='he_normal'),
+        #     Dense(units=action_dim, kernel_initializer='he_normal')
+        # ])
+        
+        # Rewrite the base weights to initialise using Xavier(gain=1.0) and bias=0.0
         self.base = tf.keras.Sequential([
-            Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
-            Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
-            Dense(units=128, activation=tf.nn.relu, kernel_initializer='he_normal'),
-            Dense(units=action_dim, kernel_initializer='he_normal')
+            Dense(units=256, activation=tf.nn.relu, kernel_initializer='glorot_uniform', bias_initializer='zeros'),
+            Dense(units=256, activation=tf.nn.relu, kernel_initializer='glorot_uniform', bias_initializer='zeros'),
+            Dense(units=128, activation=tf.nn.relu, kernel_initializer='glorot_uniform', bias_initializer='zeros'),
+            Dense(units=action_dim, kernel_initializer='glorot_uniform', bias_initializer='zeros')
         ])
+        
         self.MEAN_MIN, self.MEAN_MAX = -7, 7
         # self.LOG_STD_MIN, self.LOG_STD_MAX = -5, 2
         self.eps = np.finfo(np.float32).eps
@@ -223,11 +232,19 @@ class Director(tf.keras.Model):
     def __init__(self, skill_dim):
         super(Director, self).__init__()
 
+        # self.base = tf.keras.Sequential([
+        #     Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
+        #     Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
+        #     Dense(units=128, activation=tf.nn.relu, kernel_initializer='he_normal'),
+        #     Dense(units=skill_dim, kernel_initializer='he_normal')
+        # ])
+        
+        # Rewrite the base weights to initialise using Xavier(gain=1.0) and bias=0.0
         self.base = tf.keras.Sequential([
-            Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
-            Dense(units=256, activation=tf.nn.relu, kernel_initializer='he_normal'),
-            Dense(units=128, activation=tf.nn.relu, kernel_initializer='he_normal'),
-            Dense(units=skill_dim, kernel_initializer='he_normal')
+            Dense(units=256, activation=tf.nn.relu, kernel_initializer='glorot_uniform', bias_initializer='zeros'),
+            Dense(units=256, activation=tf.nn.relu, kernel_initializer='glorot_uniform', bias_initializer='zeros'),
+            Dense(units=128, activation=tf.nn.relu, kernel_initializer='glorot_uniform', bias_initializer='zeros'),
+            Dense(units=skill_dim, kernel_initializer='glorot_uniform', bias_initializer='zeros')
         ])
         
         self.train = True
@@ -452,7 +469,7 @@ class SkilledActors(tf.keras.Model):
             
         return path, log_prob_traj
     
-    def viterbi_decode(self, states, actions, init_skill, use_ref=False):
+    def viterbi_decode(self, states, actions, init_skill, use_ref):
         """
         Computes the Viterbi path for the given
         > states (T x s_dim),

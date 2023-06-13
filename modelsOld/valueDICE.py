@@ -19,7 +19,7 @@ from her.rollout import RolloutWorker
 from networks.general import preTanhActor, Critic
 from utils.buffer import get_buffer_shape
 from utils.env import get_PnP_env
-from utils.custom import evaluate_worker
+from evaluation.eval import evaluate_worker
 
 logger = logging.getLogger(__name__)
 

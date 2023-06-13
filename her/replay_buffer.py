@@ -130,19 +130,10 @@ class ReplayBufferTf:
 		with open(path, 'wb') as handle:
 			pickle.dump(buffered_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 	
-	def load_data_into_buffer(self, path_to_data=None, clear_buffer=True, num_demos_to_load=None, buffered_data=None):
+	def load_data_into_buffer(self, buffered_data=None, clear_buffer=True, num_demos_to_load=None):
 		
-		import pickle
-		
-		if buffered_data is None and path_to_data:
-			with open(path_to_data, 'rb') as handle:
-				buffered_data = pickle.load(handle)
-		elif path_to_data is None and buffered_data:
-			pass
-		elif buffered_data is None and path_to_data is None:
-			raise ValueError("Either buffered_data or path_to_data must be provided")
-		else:
-			raise ValueError("Only one of buffered_data or path_to_data can be provided")
+		if buffered_data is None:
+			raise ValueError("No buffered_data provided")
 		
 		if clear_buffer:
 			self.clear_buffer()
@@ -164,7 +155,7 @@ class ReplayBufferTf:
 		
 		self.table.write(rows=idxs, values=values)
 		self.n_transitions_stored.assign(self.n_transitions_stored + len(idxs) * self.T)
-		logger.info("Loaded {} episodes into the buffer.".format(len(idxs)))
+		# logger.info("Loaded {} episodes into the buffer.".format(len(idxs)))
 
 
 class ReplayBuffer:

@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import pickle
 import sys
 import time
 import numpy as np
@@ -18,7 +19,7 @@ from models.skilledDemoDICE import Agent as Agent_skilledDemoDICE
 from models.GoFar import Agent as Agent_GoFar
 from models.BC import Agent as Agent_BC
 from utils.buffer import get_buffer_shape
-from utils.custom import state_to_goal
+from utils.custom import state_to_goal, repurpose_skill_seq
 from verify import run_verify
 
 
@@ -131,11 +132,11 @@ def run(db: bool, algo: str):
 		sample_transitions(args.trans_style, state_to_goal=state_to_goal(n_objs), num_options=args.c_dim)
 	)
 	if n_objs == 3:
-		expert_data_file = 'three_obj_{}_{}_train.pkl'.format(args.expert_behaviour, args.wrap_skill_id)
-		offline_data_file = 'three_obj_{}_{}_offline.pkl'.format(args.expert_behaviour, args.wrap_skill_id)
+		expert_data_file = 'three_obj_{}_train.pkl'.format(args.expert_behaviour)
+		offline_data_file = 'three_obj_{}_offline.pkl'.format(args.expert_behaviour)
 	elif n_objs == 2:
-		expert_data_file = 'two_obj_{}_{}_train.pkl'.format(args.expert_behaviour, args.wrap_skill_id)
-		offline_data_file = 'two_obj_{}_{}_offline.pkl'.format(args.expert_behaviour, args.wrap_skill_id)
+		expert_data_file = 'two_obj_{}_train.pkl'.format(args.expert_behaviour)
+		offline_data_file = 'two_obj_{}_offline.pkl'.format(args.expert_behaviour)
 	elif n_objs == 1:
 		expert_data_file = 'single_obj_train.pkl'
 		offline_data_file = 'single_obj_offline.pkl'
@@ -158,11 +159,24 @@ def run(db: bool, algo: str):
 	
 	# Store the expert data in the expert buffer -> D_E
 	logger.info("Loading Expert Demos from {} into Expert Buffer for training.".format(expert_data_path))
-	expert_buffer.load_data_into_buffer(path_to_data=expert_data_path, num_demos_to_load=args.expert_demos)
+	with open(expert_data_path, 'rb') as handle:
+		buffered_data = pickle.load(handle)
+	# [Optional] Reformat the G.T. skill sequences
+	curr_skills = repurpose_skill_seq(args, buffered_data['curr_skills'])
+	prev_skills = repurpose_skill_seq(args, buffered_data['prev_skills'])
+	buffered_data['curr_skills'] = curr_skills
+	buffered_data['prev_skills'] = prev_skills
+	expert_buffer.load_data_into_buffer(buffered_data=buffered_data, num_demos_to_load=args.expert_demos)
 	
 	# Store the expert and offline data in the policy buffer for DemoDICE -> D_O
 	logger.info("Loading Offline Demos from {} into Offline Buffer for training.".format(offline_data_path))
-	offline_buffer.load_data_into_buffer(path_to_data=offline_data_path, num_demos_to_load=args.offline_demos)
+	with open(offline_data_path, 'rb') as handle:
+		buffered_data = pickle.load(handle)
+	curr_skills = repurpose_skill_seq(args, buffered_data['curr_skills'])
+	prev_skills = repurpose_skill_seq(args, buffered_data['prev_skills'])
+	buffered_data['curr_skills'] = curr_skills
+	buffered_data['prev_skills'] = prev_skills
+	offline_buffer.load_data_into_buffer(buffered_data=buffered_data, num_demos_to_load=args.offline_demos)
 
 	# ########################################################################################################### #
 	# ############################################# TRAINING #################################################### #
