@@ -18,7 +18,7 @@ from models.skilledDemoDICE import Agent as Agent_skilledDemoDICE
 from models.GoFar import Agent as Agent_GoFar
 from models.BC import Agent as Agent_BC
 from utils.buffer import get_buffer_shape
-from utils.custom import state_to_goal
+from utils.custom import turn_off_GPU, state_to_goal
 from verify import run_verify
 
 
@@ -101,16 +101,6 @@ def run(db: bool, algo: str):
 	config = OrderedDict(sorted(config.items()))
 	logger.info(json.dumps(config, indent=4))
 	
-	# # For Debugging [#2]
-	# if args.fix_goal and args.fix_object:
-	# 	data_prefix = 'fOfG_'
-	# elif args.fix_goal and not args.fix_object:
-	# 	data_prefix = 'dOfG_'
-	# elif args.fix_object and not args.fix_goal:
-	# 	data_prefix = 'fOdG_'
-	# else:
-	# 	data_prefix = 'dOdG_'
-	
 	# Clear tensorflow graph and cache
 	tf.keras.backend.clear_session()
 	tf.compat.v1.reset_default_graph()
@@ -181,8 +171,11 @@ def run(db: bool, algo: str):
 
 
 if __name__ == "__main__":
-	num_runs = 1
+	turn_off_GPU()
+	tf.print("Visible devices: ", tf.config.get_visible_devices())
+
+	num_runs = 5
 	for i in range(num_runs):
-		run(db=True, algo='SkilledDemoDICE')
+		run(db=False, algo='DemoDICE')
 	# verify(algo='GoFar')
 

@@ -9,8 +9,8 @@ def get_DICE_args(log_dir, db=False):
 
     parser.add_argument('--log_wandb', type=bool, default=not db)
     # parser.add_argument('--log_wandb', type=bool, default=False)
-    parser.add_argument('--wandb_project', type=str, default='offlineILPnPOneExp',
-                        choices=['offlineILPnPOne', 'offlineILPnPOne'])
+    parser.add_argument('--wandb_project', type=str, default='offlineILPnPThreeExp',
+                        choices=['offlineILPnPOne', 'offlineILPnPOne', 'offlineILPnPThreeExp', 'offlineILPnPThree'])
 
     parser.add_argument('--expert_demos', type=int, default=25)
     parser.add_argument('--offline_demos', type=int, default=75)
@@ -28,10 +28,10 @@ def get_DICE_args(log_dir, db=False):
 
     # Specify Environment Configuration
     parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
-    parser.add_argument('--num_objs', type=int, default=1)
-    parser.add_argument('--horizon', type=int, default=100,
+    parser.add_argument('--num_objs', type=int, default=3)
+    parser.add_argument('--horizon', type=int, default=200,
                         help='Set 100 for one_obj, 150 for two_obj and 200 for three_obj')
-    parser.add_argument('--stacking', type=bool, default=False)
+    parser.add_argument('--stacking', type=bool, default=True)
     parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0', '1'],
                         help='Expert behaviour in two_object env')
     parser.add_argument('--full_space_as_goal', type=bool, default=False)
@@ -49,7 +49,7 @@ def get_DICE_args(log_dir, db=False):
                         help='No. of time steps to run pretraining - actor, director on expert data. Set to 0 to skip')
     parser.add_argument('--max_time_steps', type=int, default=10000 if not db else 100,
                         help='No. of time steps to run. Recommended 5k for one_obj, 10k for two_obj')
-    parser.add_argument('--batch_size', type=int, default=3 * 256,
+    parser.add_argument('--batch_size', type=int, default=9 * 256,
                         help='No. of trans to sample from buffer for each update')
     parser.add_argument('--trans_style', type=str, default='random_unsegmented',
                         choices=['random_unsegmented', 'random_segmented'],

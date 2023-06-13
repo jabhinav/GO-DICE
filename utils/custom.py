@@ -174,3 +174,14 @@ def _update_pbar_msg(args, pbar, total_timesteps):
         msg += ' - Exploitation'
     if pbar.desc != msg:
         pbar.set_description(msg)
+
+
+def turn_off_GPU():
+    # physical_devices = tf.config.list_physical_devices('GPU')
+    # tf.print("GPU devices: ", physical_devices)  # When running this, it initialises the GPU, below logic doesn't work
+
+    # Disable all GPUS
+    tf.config.set_visible_devices([], 'GPU')
+    visible_devices = tf.config.get_visible_devices()
+    for device in visible_devices:
+        assert device.device_type != 'GPU'

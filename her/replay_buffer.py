@@ -164,7 +164,7 @@ class ReplayBufferTf:
 		
 		self.table.write(rows=idxs, values=values)
 		self.n_transitions_stored.assign(self.n_transitions_stored + len(idxs) * self.T)
-		logger.info("Loaded {} episodes into the buffer.".format(len(idxs)))
+		# logger.info("Loaded {} episodes into the buffer.".format(len(idxs)))
 
 
 class ReplayBuffer:
