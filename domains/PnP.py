@@ -56,7 +56,6 @@ class PnPEnv(object):
 		# Subgoal Achieved Indicator
 		self.pick_sub_goals_achieved: Dict[int, bool] = {}
 		self.place_sub_goals_achieved: Dict[int, bool] = {}
-		self.pick_sub_goals_distances: Dict[int, float] = {}
 		self.place_sub_goals_distances: Dict[int, float] = {}
 	
 	def sample_hand_pos(self, block_pos):
@@ -189,9 +188,6 @@ class PnPEnv(object):
 		self.place_sub_goals_achieved: Dict[int, bool] = {
 			i: False for i in range(self.num_objs)
 		}
-		self.pick_sub_goals_distances: Dict[int, float] = {
-			i: np.inf for i in range(self.num_objs)
-		}
 		self.place_sub_goals_distances: Dict[int, float] = {
 			i: np.inf for i in range(self.num_objs)
 		}
@@ -217,10 +213,8 @@ class PnPEnv(object):
 					self.place_sub_goals_achieved[obj] = True
 					
 		# Update distances
-		gripper_pos = next_obs[:3]
 		for obj in range(self.num_objs):
 			obj_pos = next_obs[3 + 3 * obj:6 + 3 * obj]
-			self.pick_sub_goals_distances[obj] = np.linalg.norm(gripper_pos - obj_pos)
 			goal_pos = self.current_goal[3 * obj: 3 + 3 * obj]
 			self.place_sub_goals_distances[obj] = np.linalg.norm(obj_pos - goal_pos)
 					
@@ -316,9 +310,6 @@ class MyPnPEnvWrapper(PnPEnv):
 				subgoal_info['subgoals/pick/{}'.format(key)] = int(True)
 		
 		subgoal_distances = {}
-		for key, value in self.pick_sub_goals_distances.items():
-			subgoal_distances['subgoals/pick/{}'.format(key)] = value
-			
 		for key, value in self.place_sub_goals_distances.items():
 			subgoal_distances['subgoals/place/{}'.format(key)] = value
 		
