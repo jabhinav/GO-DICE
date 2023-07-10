@@ -9,8 +9,8 @@ def get_DICE_args(log_dir, db=False):
 	
 	parser.add_argument('--log_wandb', type=bool, default=not db)
 	# parser.add_argument('--log_wandb', type=bool, default=False)
-	parser.add_argument('--wandb_project', type=str, default='offlineILPnPTwoExp',
-						choices=['offlineILPnPOne', 'offlineILPnPOneExp', 'offlineILPnPTwoExp'])
+	parser.add_argument('--wandb_project', type=str, default='offlineILPnPDEBUGExp',
+						choices=['offlineILPnPOne', 'offlineILPnPOneExp', 'offlineILPnPTwoExp', 'offlineILPnPDEBUG'])
 	
 	parser.add_argument('--expert_demos', type=int, default=25)
 	parser.add_argument('--offline_demos', type=int, default=75)
@@ -28,9 +28,9 @@ def get_DICE_args(log_dir, db=False):
 	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
 	parser.add_argument('--num_objs', type=int, default=2)
 	parser.add_argument('--horizon', type=int, default=150,
-						help='Set 100 for one_obj, 150 for two_obj and 200 for three_obj')
+						help='Set 100 for one_obj, 150 for two_obj')
 	parser.add_argument('--stacking', type=bool, default=False)
-	parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0', '1'],
+	parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0'],
 						help='Expert behaviour in two_object env')
 	parser.add_argument('--full_space_as_goal', type=bool, default=False)
 	parser.add_argument('--fix_goal', type=bool, default=False,
@@ -63,18 +63,18 @@ def get_DICE_args(log_dir, db=False):
 	
 	# Viterbi configuration
 	parser.add_argument('--skill_supervision', type=str, default='full',
-						choices=['full', 'semi:0.10', 'semi:0.25', 'none'],
+						choices=['full', 'semi:0.10', 'semi:0.25', 'semi:0.50', 'none'],
 						help='Type of supervision for latent skills. '
 							 'full: Use ground truth skills for offline data.'
 							 'semi:x: Use Viterbi to update latent skills for offline data.'
 							 'none: Use Viterbi to update latent skills for expert and offline data.')
-	# parser.add_argument('--update_skills_interval', type=int, default=1,
-	# 					help='Number of time steps after which latent skills will be updated using Viterbi [Unused]')
 	parser.add_argument('--num_skills', type=int, default=None,
 						help='Number of skills to use for agent, if provided, will override expert skill set. '
 							 'Use when skill supervision is "none"')
-	parser.add_argument('--wrap_level', type=str, default='1', choices=['0', '1', '2'],
-						help='consumed by multi-object expert to determine how to wrap effective skills')
+	parser.add_argument('--wrap_level', type=str, default='0', choices=['0', '1', '2'],
+						help='consumed by multi-object expert to determine how to wrap effective skills of expert')
+	# parser.add_argument('--update_skills_interval', type=int, default=1,
+	# 					help='Number of time steps after which latent skills will be updated using Viterbi [Unused]')
 	
 	# Polyak
 	parser.add_argument('--update_target_interval', type=int, default=20,
@@ -86,20 +86,19 @@ def get_DICE_args(log_dir, db=False):
 	parser.add_argument('--critic_polyak', type=float, default=0.95,
 						help='Polyak averaging coefficient for critic.')
 	
-	# Logging Configuration
+	# Evaluation
 	parser.add_argument('--eval_interval', type=int, default=100)
+	parser.add_argument('--visualise_test', type=bool, default=False, help='Visualise test episodes?')
+	parser.add_argument('--subgoal_reward', type=int, default=1, help='Reward for achieving subgoals')
 	
-	# Parameters
+	# # Parameters
 	parser.add_argument('--discount', type=float, default=0.99, help='Discount used for returns.')
 	parser.add_argument('--replay_regularization', type=float, default=0.05,
 						help='Replay Regularization Coefficient. Used by both ValueDICE (0.1) and DemoDICE (0.05)')
-	
-	# Gradient Penalty Coefficients
 	parser.add_argument('--nu_grad_penalty_coeff', type=float, default=1e-4,
 						help='Nu Net Gradient Penalty Coefficient. ValueDICE uses 10.0, DemoDICE uses 1e-4')
 	parser.add_argument('--cost_grad_penalty_coeff', type=float, default=10,
 						help='Cost Net Gradient Penalty Coefficient')
-	
 	parser.add_argument('--actor_lr', type=float, default=3e-3)
 	parser.add_argument('--critic_lr', type=float, default=3e-4)
 	parser.add_argument('--disc_lr', type=float, default=3e-4)
@@ -133,7 +132,7 @@ def get_DICE_args(log_dir, db=False):
 	
 	# Set number of skills [For full or semi-supervised skill learning]
 	if args.env_name == 'OpenAIPickandPlace' and args.wrap_level != '0' and args.skill_supervision != 'none':
-		print('Overriding c_dim based on %s' % args.wrap_level)
+		print('Overriding c_dim based on Wrap Level %s' % args.wrap_level)
 		if args.wrap_level == '1':
 			args.c_dim = 3
 		elif args.wrap_level == '2':

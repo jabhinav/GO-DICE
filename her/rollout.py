@@ -198,7 +198,6 @@ class RolloutWorker:
 			'ep_success': success,
 			'ep_length': t+1,
 		}
-		
 		self.n_episodes += 1
 		return episode, stats
 

@@ -131,9 +131,9 @@ def run(args):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--num_demos', type=int, default=100)
+	parser.add_argument('--num_demos', type=int, default=5)
 	parser.add_argument('--split_tag', type=str, default='train')
-	parser.add_argument('--render', type=bool, default=False)
+	parser.add_argument('--render', type=bool, default=True)
 	
 	# Specify Environment Configuration
 	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')

@@ -1,3 +1,4 @@
+import copy
 import datetime
 import json
 import os
@@ -20,7 +21,6 @@ from models.GoFar import Agent as Agent_GoFar
 from models.BC import Agent as Agent_BC
 from utils.buffer import get_buffer_shape
 from utils.custom import state_to_goal, repurpose_skill_seq
-from verify import run_verify
 
 
 get_config = {
@@ -44,7 +44,13 @@ Agents = {
 
 def verify(algo: str):
 	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+	
+	# Set the random seeds randomly for more randomness
+	np.random.seed(int(time.time()))
+	tf.random.set_seed(int(time.time()))
+	
 	tf.config.run_functions_eagerly(True)
+	
 	log_dir = os.path.join('./logging', 'verify' + current_time)
 	if not os.path.exists(log_dir):
 		os.makedirs(log_dir, exist_ok=True)
@@ -59,6 +65,7 @@ def verify(algo: str):
 
 	args = get_config[algo](log_dir, db=True)
 	args.algo = algo
+	args.log_dir = log_dir
 	
 	logger.info("---------------------------------------------------------------------------------------------")
 	config: dict = vars(args)
@@ -66,22 +73,61 @@ def verify(algo: str):
 	config = OrderedDict(sorted(config.items()))
 	logger.info(json.dumps(config, indent=4))
 	
-	run_verify(args, model_dir='./logging/TwoObj_skilledDemoDICE_semi_unseg_polyak/models')
+	# List Model Directories
+	model_dirs = []
+	for root, dirs, files in os.walk('./logging/SkilledDemoDICE/'):
+		for name in dirs:
+			if 'run' in name:
+				model_dirs.append(os.path.join(root, name, 'models'))
+	
+	
+	for model_dir in model_dirs:
+		
+		print("Verifying Model: {}".format(model_dir))
+		
+		# Create log directory within args.log_dir
+		log_dir = os.path.join(args.log_dir, os.path.basename(os.path.dirname(model_dir)))
+		if not os.path.exists(log_dir):
+			os.makedirs(log_dir, exist_ok=True)
+		
+		args.log_dir = log_dir
+		args.log_wandb = False
+		args.visualise_test = True
+		
+		# ############################################# Verifying ################################################## #
+		agent = Agents[algo](args)
+		print("\n------------- Verifying Actor at {} -------------".format(model_dir))
+		logger.info("Loading Model Weights from {}".format(model_dir))
+		agent.load_model(dir_param=model_dir)
+		
+		# resume_files = os.listdir('./pnp_data/two_obj_0_1_train_env_states')
+		# resume_files = [f for f in resume_files if f.endswith('.pkl')]
+		# resume_states = []
+		# for f in resume_files:
+		# 	with open(os.path.join('./pnp_data/two_obj_0_1_train_env_states', f), 'rb') as file:
+		# 		resume_states.append(pickle.load(file))
+		
+		agent.visualise(
+			use_expert_skill=True,
+			use_expert_action=False,
+			resume_states=None,
+			num_episodes=5,
+		)
 
 
-def run(db: bool, algo: str):
+def run(debug: bool, algo: str):
 	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 	
 	# Set the random seeds randomly for more randomness
 	np.random.seed(int(time.time()))
 	tf.random.set_seed(int(time.time()))
 	
-	if db:
+	if debug:
 		print("Running in Debug Mode. (db=True)")
 	
-	tf.config.run_functions_eagerly(db)
+	tf.config.run_functions_eagerly(debug)
 	
-	log_dir = os.path.join('./logging', algo, '{}'.format('debug' if db else 'run') + current_time)
+	log_dir = os.path.join('./logging', algo, '{}'.format('debug' if debug else 'run') + current_time)
 	if not os.path.exists(log_dir):
 		os.makedirs(log_dir, exist_ok=True)
 	
@@ -93,8 +139,9 @@ def run(db: bool, algo: str):
 	
 	logger.info("# ################# Working on Model: \"{}\" ################# #".format(algo))
 	
-	args = get_config[algo](log_dir, db=db)
+	args = get_config[algo](log_dir, db=debug)
 	args.algo = algo
+	args.log_dir = log_dir
 	
 	logger.info("---------------------------------------------------------------------------------------------")
 	config: dict = vars(args)
@@ -161,21 +208,30 @@ def run(db: bool, algo: str):
 	logger.info("Loading Expert Demos from {} into Expert Buffer for training.".format(expert_data_path))
 	with open(expert_data_path, 'rb') as handle:
 		buffered_data = pickle.load(handle)
+	
 	# [Optional] Reformat the G.T. skill sequences
 	curr_skills = repurpose_skill_seq(args, buffered_data['curr_skills'])
 	prev_skills = repurpose_skill_seq(args, buffered_data['prev_skills'])
 	buffered_data['curr_skills'] = curr_skills
 	buffered_data['prev_skills'] = prev_skills
+	# Add a new key "has_gt_skill" indicating that the skill is G.T.
+	buffered_data['has_gt_skill'] = tf.ones_like(buffered_data['successes'], dtype=tf.float32)
+	buffered_data['skill_dec_confidence'] = tf.ones_like(buffered_data['successes'], dtype=tf.float32)
 	expert_buffer.load_data_into_buffer(buffered_data=buffered_data, num_demos_to_load=args.expert_demos)
 	
-	# Store the expert and offline data in the policy buffer for DemoDICE -> D_O
+	# Store the offline data in the policy buffer for DemoDICE -> D_O
 	logger.info("Loading Offline Demos from {} into Offline Buffer for training.".format(offline_data_path))
 	with open(offline_data_path, 'rb') as handle:
 		buffered_data = pickle.load(handle)
+	
+	# [Optional] Reformat the G.T. skill sequences
 	curr_skills = repurpose_skill_seq(args, buffered_data['curr_skills'])
 	prev_skills = repurpose_skill_seq(args, buffered_data['prev_skills'])
 	buffered_data['curr_skills'] = curr_skills
 	buffered_data['prev_skills'] = prev_skills
+	# Add a new key "has_gt_skill" indicating that the skill is G.T.
+	buffered_data['has_gt_skill'] = tf.ones_like(buffered_data['successes'], dtype=tf.float32)
+	buffered_data['skill_dec_confidence'] = tf.ones_like(buffered_data['successes'], dtype=tf.float32)
 	offline_buffer.load_data_into_buffer(buffered_data=buffered_data, num_demos_to_load=args.offline_demos)
 
 	# ########################################################################################################### #
@@ -195,8 +251,8 @@ def run(db: bool, algo: str):
 
 
 if __name__ == "__main__":
-	num_runs = 5
+	num_runs = 1
 	for i in range(num_runs):
-		run(db=False, algo='SkilledDemoDICE')
-	# verify(algo='GoFar')
+		run(debug=False, algo='SkilledDemoDICE')
+	# verify(algo='SkilledDemoDICE')
 

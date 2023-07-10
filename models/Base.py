@@ -48,16 +48,19 @@ class AgentBase(object):
 		self.eval_env: MyPnPEnvWrapper = get_PnP_env(args)
 		
 		# Define the Rollout Workers
+		# Worker 1: For offline data collection
 		self.policy_worker = RolloutWorker(
 			self.env, self.model, T=args.horizon, rollout_terminate=False, render=False,
 			is_expert_worker=False
 		)
+		# Worker 2: For evaluation
 		self.eval_worker = RolloutWorker(
 			self.eval_env, self.model, T=args.horizon, rollout_terminate=True, render=False,
 			is_expert_worker=False
 		)
+		# Worker 3: For visualisation
 		self.visualise_worker = RolloutWorker(
-			self.eval_env, self.model, T=args.horizon, rollout_terminate=False, render=True,
+			self.eval_env, self.model, T=args.horizon, rollout_terminate=False, render=args.visualise_test,
 			is_expert_worker=False
 		)
 		
@@ -198,13 +201,18 @@ class AgentBase(object):
 		# This is a base class method, inherited classes must implement this method
 		raise NotImplementedError
 	
-	def evaluate(self, max_return=None, max_return_with_exp_assist=None, log_step=None):
+	def evaluate(self, max_return=None, max_return_with_exp_assist=None, log_step=None, debug_with_exp_assist=False):
 		
 		self.model.change_training_mode(training_mode=False)
+		
+		# ############################### Evaluate the model ############################################## #
 		self.model.act_w_expert_skill = False
 		self.model.act_w_expert_action = False
 		
-		avg_return, avg_time, avg_goal_dist, avg_perc_dec = evaluate_worker(self.eval_worker, self.args.eval_demos)
+		avg_return, avg_time, avg_goal_dist, avg_perc_dec, avg_subgoal_achievement_reward, \
+			avg_subgoals_achieved, avg_subgoals_dist = evaluate_worker(self.eval_worker, self.args.eval_demos,
+																	   subgoal_reward=self.args.subgoal_reward)
+		
 		if max_return is None:
 			max_return = avg_return
 		elif avg_return > max_return:
@@ -213,44 +221,69 @@ class AgentBase(object):
 		
 		# Log the data
 		if self.args.log_wandb:
-			self.wandb_logger.log({
+			log_metrics = {
 				'stats/success_rate': avg_return,
 				'stats/eval_max_return': max_return,
 				'stats/eval_avg_time': avg_time,
 				'stats/eval_avg_goal_dist': avg_goal_dist,
 				'stats/eval_avg_perc_dec': avg_perc_dec,
-			}, step=log_step)
-		tf.print(f"Eval Return: {avg_return}, "
-				 f"Eval Avg Time: {avg_time}, "
-				 f"Eval Avg Goal Dist: {avg_goal_dist}",
-				 f"Eval Avg Perc Dec: {avg_perc_dec}")
+				'stats/eval_avg_subgoal_achievement_reward': avg_subgoal_achievement_reward,
+			}
+			for key, value in avg_subgoals_achieved.items():
+				log_metrics[f'stats/{key.replace("/", "_")}'] = value
+			for key, value in avg_subgoals_dist.items():
+				log_metrics[f'stats/distances/{key.replace("/", "_")}'] = value
+			
+			self.wandb_logger.log(log_metrics, step=log_step)
 		
-		# # TODO: max_return_with_exp_assist with expert goals won't run for multi-object case as of now,
-		# #  the expert goals are in 3D while the model conditions on the env goals which are in num_objects x 3D
+		tf.print(f"\nEval Return: {avg_return}, "
+				 f"\nEval Avg Time: {avg_time}, "
+				 f"\nEval Avg Goal Dist: {avg_goal_dist}",
+				 f"\nEval Avg Perc Dec: {avg_perc_dec}",
+				 f"\nEval Avg Subgoal Achievement Reward: {avg_subgoal_achievement_reward}",)
 		
-		# # We use expert skill to assist the policy
-		# self.model.act_w_expert_skill = True
-		# self.model.act_w_expert_action = False
-		# avg_return, avg_time, avg_goal_dist, avg_perc_dec = evaluate_worker(self.eval_worker, self.args.eval_demos)
-		# if max_return_with_exp_assist is None:
-		# 	max_return_with_exp_assist = avg_return
-		# elif avg_return > max_return_with_exp_assist:
-		# 	max_return_with_exp_assist = avg_return
-		# 	self.save_model(os.path.join(self.args.dir_param, 'best_model_with_exp_assist'))
-		#
-		# # Log the data
-		# if self.args.log_wandb:
-		# 	self.wandb_logger.log({
-		# 		'stats/exp_assist/success_rate': avg_return,
-		# 		'stats/exp_assist/eval_max_return': max_return_with_exp_assist,
-		# 		'stats/exp_assist/eval_avg_time': avg_time,
-		# 		'stats/exp_assist/eval_avg_goal_dist': avg_goal_dist,
-		# 		'stats/exp_assist/eval_avg_perc_dec': avg_perc_dec,
-		# 	}, step=log_step)
-		# tf.print(f"Eval Return (Exp Assist): {avg_return}, "
-		# 		 f"Eval Avg Time (Exp Assist): {avg_time}, "
-		# 		 f"Eval Avg Goal Dist (Exp Assist): {avg_goal_dist}, "
-		# 		 f"Eval Avg Perc Dec (Exp Assist): {avg_perc_dec}")
+		# ############################### Evaluate the model (Expert Assist) ################################### #
+		if debug_with_exp_assist:
+			
+			# # TODO: max_return_with_exp_assist with expert goals won't run for multi-object case as of now,
+			# #  the expert goals are in 3D while the model conditions on the env goals which are in num_objects x 3D
+			
+			# We use expert skill to assist the policy
+			self.model.act_w_expert_skill = True  # Define here to use expert skill transitions
+			self.model.act_w_expert_action = False  # Define here to use expert policy for action selection
+			avg_return, avg_time, avg_goal_dist, avg_perc_dec, avg_subgoal_achievement_reward, \
+				avg_subgoals_achieved, avg_subgoals_dist = evaluate_worker(self.eval_worker, self.args.eval_demos,
+																		   subgoal_reward=self.args.subgoal_reward)
+			
+			if max_return_with_exp_assist is None:
+				max_return_with_exp_assist = avg_return
+			
+			elif avg_return > max_return_with_exp_assist:
+				max_return_with_exp_assist = avg_return
+				self.save_model(os.path.join(self.args.dir_param, 'best_model_with_exp_assist'))
+				
+			# Log the data
+			if self.args.log_wandb:
+				log_metrics = {
+					'statsExpertAssist/success_rate': avg_return,
+					'statsExpertAssist/eval_max_return': max_return,
+					'statsExpertAssist/eval_avg_time': avg_time,
+					'statsExpertAssist/eval_avg_goal_dist': avg_goal_dist,
+					'statsExpertAssist/eval_avg_perc_dec': avg_perc_dec,
+					'statsExpertAssist/eval_avg_subgoal_achievement_reward': avg_subgoal_achievement_reward,
+				}
+				for key, value in avg_subgoals_achieved.items():
+					log_metrics[f'statsExpertAssist/{key.replace("/", "_")}'] = value
+				for key, value in avg_subgoals_dist.items():
+					log_metrics[f'statsExpertAssist/distances/{key.replace("/", "_")}'] = value
+				
+				self.wandb_logger.log(log_metrics, step=log_step)
+			
+			tf.print(f"\nEval Return (ExpertAssist): {avg_return}, "
+					 f"\nEval Avg Time (ExpertAssist): {avg_time}, "
+					 f"\nEval Avg Goal Dist (ExpertAssist): {avg_goal_dist}",
+					 f"\nEval Avg Perc Dec (ExpertAssist): {avg_perc_dec}",
+					 f"\nEval Avg Subgoal Achievement Reward (ExpertAssist): {avg_subgoal_achievement_reward}", )
 		
 		return max_return, max_return_with_exp_assist
 	
@@ -272,5 +305,6 @@ class AgentBase(object):
 			worker=self.visualise_worker,
 			num_episodes=self.args.test_demos if num_episodes is None else num_episodes,
 			log_traj=True,
+			log_dir=self.args.log_dir,
 			resume_states=resume_states
 		)

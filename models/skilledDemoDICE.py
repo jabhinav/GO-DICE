@@ -126,6 +126,10 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 			weight = tf.reshape(weight, (-1, 1))
 			weight = tf.expand_dims(weight, -1)
 			weight = weight / tf.reduce_mean(weight)  # Normalise weight using self-normalised importance sampling
+			
+			# Shape data_rb['skill_dec_confidence'] as weight i.e. (batch_size, 1, 1)
+			skill_dec_confidence = tf.reshape(data_rb['skill_dec_confidence'], (-1, 1))
+			skill_dec_confidence = tf.expand_dims(skill_dec_confidence, -1)
 
 			# Compute the log probs of current skill using the director
 			curr_skill_log_prob = self.skilled_actors.get_director_log_probs(
@@ -510,7 +514,7 @@ class Agent(AgentBase):
 				'avg_log_prob': tf.reduce_mean(log_probs),
 		}
 		
-		return result, new_prev_skills, new_curr_skills
+		return result, new_prev_skills, new_curr_skills, tf.stack(log_probs, axis=0)
 	
 	@tf.function
 	def pretrain(self):
@@ -545,10 +549,12 @@ class Agent(AgentBase):
 		vit_res_exp = {
 			'per_step_viterbi_acc': 1.0,
 			'per_ep_viterbi_acc': 1.0,
+			'avg_log_prob': 0.0,
 		}
 		vit_res_off = {
 			'per_step_viterbi_acc': 1.0,
 			'per_ep_viterbi_acc': 1.0,
+			'avg_log_prob': 0.0,
 		}
 
 		# # Get the indices of the expert and offline episodes (offline data has expert data as well)
@@ -630,21 +636,29 @@ class Agent(AgentBase):
 					# Semi-supervision of latent skills: Update offline skills
 					if 'semi' in self.args.skill_supervision:
 						
-						vit_res_off, c_off_prev, c_off_curr = self.infer_skills(
+						vit_res_off, c_off_prev, c_off_curr, traj_log_probs_off = self.infer_skills(
 							data_off, c_off_curr_gt, compute_viterbi_acc=args.c_dim == c_gt_dim
 						)
 						
 						# Update the offline buffer with the viterbi decoded skill sequence
 						data_off['prev_skills'] = c_off_prev
 						data_off['curr_skills'] = c_off_curr
+						data_off['has_gt_skill'] = 0.0 * data_off['has_gt_skill']
+						
+						# [Broadcast] Allocate trajectory probability to each time step in the trajectory
+						traj_log_probs_off = tf.reshape(
+							tf.repeat(traj_log_probs_off, repeats=self.args.horizon, axis=0),
+							shape=(traj_log_probs_off.shape[0], self.args.horizon)
+						)
+						data_off['skill_dec_confidence'] = tf.math.exp(traj_log_probs_off)
 						
 					# Unsupervised latent skills: Update expert and offline skills
 					elif self.args.skill_supervision == 'none':
 						decoding_start_time = time.time()
-						vit_res_exp, c_exp_prev, c_exp_curr = self.infer_skills(
+						vit_res_exp, c_exp_prev, c_exp_curr, traj_log_probs_exp = self.infer_skills(
 							data_exp, c_exp_curr_gt, compute_viterbi_acc=args.c_dim == c_gt_dim
 						)
-						vit_res_off, c_off_prev, c_off_curr = self.infer_skills(
+						vit_res_off, c_off_prev, c_off_curr, traj_log_probs_off = self.infer_skills(
 							data_off, c_off_curr_gt, compute_viterbi_acc=args.c_dim == c_gt_dim
 						)
 						tf.print("Decoding time: {}".format(time.time() - decoding_start_time))
@@ -652,10 +666,26 @@ class Agent(AgentBase):
 						# Update the expert buffer with the viterbi decoded skill sequence
 						data_exp['prev_skills'] = c_exp_prev
 						data_exp['curr_skills'] = c_exp_curr
+						data_exp['has_gt_skill'] = 0.0 * data_exp['has_gt_skill']
 						
 						# Update the offline buffer with the viterbi decoded skill sequence
 						data_off['prev_skills'] = c_off_prev
 						data_off['curr_skills'] = c_off_curr
+						data_off['has_gt_skill'] = 0.0 * data_off['has_gt_skill']
+						
+						# [Broadcast] Allocate trajectory probability to each time step in the trajectory
+						traj_log_probs_off = tf.reshape(
+							tf.repeat(traj_log_probs_off, repeats=self.args.horizon, axis=0),
+							shape=(traj_log_probs_off.shape[0], self.args.horizon)
+						)
+						
+						traj_log_probs_exp = tf.reshape(
+							tf.repeat(traj_log_probs_exp, repeats=self.args.horizon, axis=0),
+							shape=(traj_log_probs_exp.shape[0], self.args.horizon)
+						)
+						
+						data_exp['skill_dec_confidence'] = tf.math.exp(traj_log_probs_exp)
+						data_off['skill_dec_confidence'] = tf.math.exp(traj_log_probs_off)
 					
 					# Load the updated expert data into the expert buffer
 					self.expert_buffer.load_data_into_buffer(buffered_data=data_exp, clear_buffer=True)
@@ -664,12 +694,18 @@ class Agent(AgentBase):
 					self.offline_buffer.load_data_into_buffer(buffered_data=data_exp, clear_buffer=True)
 					self.offline_buffer.load_data_into_buffer(buffered_data=data_off, clear_buffer=False)
 	
+					# Log the metrics
 					if self.args.log_wandb:
 						self.wandb_logger.log({
+							# Per Step Viterbi Accuracy
 							'expert_viterbi_acc': vit_res_exp['per_step_viterbi_acc'],
 							'offline_viterbi_acc': vit_res_off['per_step_viterbi_acc'],
+							# Per Episode Viterbi Accuracy
 							'expert_viterbi_acc_ep': vit_res_exp['per_ep_viterbi_acc'],
 							'offline_viterbi_acc_ep': vit_res_off['per_ep_viterbi_acc'],
+							# Average Log Probability of the Viterbi Sequence decoded for whole offline data
+							'expert_viterbi_avg_log_prob': vit_res_exp['avg_log_prob'],
+							'offline_viterbi_avg_log_prob': vit_res_off['avg_log_prob'],
 						}, step=log_step)
 
 				# [Train] the policy
