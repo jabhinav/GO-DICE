@@ -75,7 +75,7 @@ def verify(algo: str):
 	
 	# List Model Directories
 	model_dirs = []
-	for root, dirs, files in os.walk('./logging/SkilledDemoDICE/'):
+	for root, dirs, files in os.walk('./logging/offlineILPnPOneExp/SkilledDemoDICE_full'):
 		for name in dirs:
 			if 'run' in name:
 				model_dirs.append(os.path.join(root, name, 'models'))
@@ -108,7 +108,7 @@ def verify(algo: str):
 		# 		resume_states.append(pickle.load(file))
 		
 		agent.visualise(
-			use_expert_skill=True,
+			use_expert_skill=False,
 			use_expert_action=False,
 			resume_states=None,
 			num_episodes=5,
@@ -179,8 +179,12 @@ def run(debug: bool, algo: str):
 		sample_transitions(args.trans_style, state_to_goal=state_to_goal(n_objs), num_options=args.c_dim)
 	)
 	if n_objs == 3:
-		expert_data_file = 'three_obj_{}_train.pkl'.format(args.expert_behaviour)
-		offline_data_file = 'three_obj_{}_offline.pkl'.format(args.expert_behaviour)
+		if args.stacking:
+			expert_data_file = 'stack_three_obj_{}_train.pkl'.format(args.expert_behaviour)
+			offline_data_file = 'stack_three_obj_{}_offline.pkl'.format(args.expert_behaviour)
+		else:
+			expert_data_file = 'three_obj_{}_train.pkl'.format(args.expert_behaviour)
+			offline_data_file = 'three_obj_{}_offline.pkl'.format(args.expert_behaviour)
 	elif n_objs == 2:
 		expert_data_file = 'two_obj_{}_train.pkl'.format(args.expert_behaviour)
 		offline_data_file = 'two_obj_{}_offline.pkl'.format(args.expert_behaviour)
@@ -251,7 +255,7 @@ def run(debug: bool, algo: str):
 
 
 if __name__ == "__main__":
-	num_runs = 1
+	num_runs = 5
 	for i in range(num_runs):
 		run(debug=False, algo='SkilledDemoDICE')
 	# verify(algo='SkilledDemoDICE')

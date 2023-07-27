@@ -501,7 +501,7 @@ class SkilledActors(tf.keras.Model):
         transition_log_probs = tf.gather_nd(log_trs, ind)  # T
         transition_probs = tf.exp(transition_log_probs)  # T
         
-        return path, log_prob_traj
+        return path, log_prob_traj, transition_probs
 
 
 class preTanhActor(tf.keras.Model):

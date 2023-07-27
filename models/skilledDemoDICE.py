@@ -146,6 +146,9 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 			)
 			
 			# The current skill index will give the actor network to update
+			# pi_loss = - tf.reduce_mean(
+			# 	tf.stop_gradient(weight * skill_dec_confidence) * (curr_skill_log_prob + curr_action_log_prob)
+			# )
 			pi_loss = - tf.reduce_mean(tf.stop_gradient(weight) * (curr_skill_log_prob + curr_action_log_prob))
 			
 
@@ -464,7 +467,8 @@ class Agent(AgentBase):
 		
 		avg_viterbi_acc_per_step = 0.0
 		avg_viterbi_acc_per_ep = 0.0
-		log_probs = []
+		log_prob_trajs = []
+		transition_probs = []
 	
 		# # Do viterbi decoding to get the best skill sequence for each episode and store it in the buffer
 		new_prev_skills = []
@@ -485,15 +489,16 @@ class Agent(AgentBase):
 			actions = buffered_data['actions'][ep_idx]
 			
 			# Get the skill sequence for the episode
-			skill_seq, log_prob = self.model.skilled_actors.viterbi_decode(states=states,
-																		   actions=actions,
-																		   init_skill=init_skill,
-																		   use_ref=True)
+			skill_seq, log_prob_traj, transition_prob = self.model.skilled_actors.viterbi_decode(
+				states=states, actions=actions, init_skill=init_skill, use_ref=True
+			)
 			# Convert the skill sequence (T+1, 1) to one-hot encoding
 			skill_seq = tf.one_hot(tf.squeeze(skill_seq, axis=-1), depth=self.args.c_dim)
 			
-			# Store the log_prob of the viterbi decoded skill sequence
-			log_probs.append(log_prob)
+			# Store the log_prob of the viterbi decoded skill sequence and individual transition probabilities
+			log_prob_trajs.append(log_prob_traj)
+			transition_probs.append(transition_prob)
+			
 			# Update the buffer with the viterbi decoded skill sequence
 			new_prev_skills.append(tf.gather(skill_seq, tf.range(0, tf.shape(skill_seq)[0] - 1)))
 			new_curr_skills.append(tf.gather(skill_seq, tf.range(1, tf.shape(skill_seq)[0])))
@@ -507,14 +512,16 @@ class Agent(AgentBase):
 		
 		new_prev_skills = tf.stack(new_prev_skills, axis=0)
 		new_curr_skills = tf.stack(new_curr_skills, axis=0)
+		log_prob_trajs = tf.stack(log_prob_trajs, axis=0)
+		transition_probs = tf.stack(transition_probs, axis=0)
 		
 		result = {
 				'per_step_viterbi_acc': avg_viterbi_acc_per_step/num_episodes,
 				'per_ep_viterbi_acc': avg_viterbi_acc_per_ep/num_episodes,
-				'avg_log_prob': tf.reduce_mean(log_probs),
+				'avg_log_prob': tf.reduce_mean(log_prob_trajs),
 		}
 		
-		return result, new_prev_skills, new_curr_skills, tf.stack(log_probs, axis=0)
+		return result, new_prev_skills, new_curr_skills, log_prob_trajs, transition_probs
 	
 	@tf.function
 	def pretrain(self):
@@ -636,7 +643,7 @@ class Agent(AgentBase):
 					# Semi-supervision of latent skills: Update offline skills
 					if 'semi' in self.args.skill_supervision:
 						
-						vit_res_off, c_off_prev, c_off_curr, traj_log_probs_off = self.infer_skills(
+						vit_res_off, c_off_prev, c_off_curr, traj_log_probs_off, trans_probs_off = self.infer_skills(
 							data_off, c_off_curr_gt, compute_viterbi_acc=args.c_dim == c_gt_dim
 						)
 						
@@ -644,21 +651,19 @@ class Agent(AgentBase):
 						data_off['prev_skills'] = c_off_prev
 						data_off['curr_skills'] = c_off_curr
 						data_off['has_gt_skill'] = 0.0 * data_off['has_gt_skill']
-						
-						# [Broadcast] Allocate trajectory probability to each time step in the trajectory
-						traj_log_probs_off = tf.reshape(
-							tf.repeat(traj_log_probs_off, repeats=self.args.horizon, axis=0),
-							shape=(traj_log_probs_off.shape[0], self.args.horizon)
+
+						# Define skill-decode confidence as the probability clipped to the interval
+						data_off['skill_dec_confidence'] = tf.clip_by_value(
+							trans_probs_off, self.args.skill_dec_conf_interval[0], self.args.skill_dec_conf_interval[1]
 						)
-						data_off['skill_dec_confidence'] = tf.math.exp(traj_log_probs_off)
 						
 					# Unsupervised latent skills: Update expert and offline skills
 					elif self.args.skill_supervision == 'none':
 						decoding_start_time = time.time()
-						vit_res_exp, c_exp_prev, c_exp_curr, traj_log_probs_exp = self.infer_skills(
+						vit_res_exp, c_exp_prev, c_exp_curr, traj_log_probs_exp, trans_probs_exp = self.infer_skills(
 							data_exp, c_exp_curr_gt, compute_viterbi_acc=args.c_dim == c_gt_dim
 						)
-						vit_res_off, c_off_prev, c_off_curr, traj_log_probs_off = self.infer_skills(
+						vit_res_off, c_off_prev, c_off_curr, traj_log_probs_off, trans_probs_off = self.infer_skills(
 							data_off, c_off_curr_gt, compute_viterbi_acc=args.c_dim == c_gt_dim
 						)
 						tf.print("Decoding time: {}".format(time.time() - decoding_start_time))
@@ -673,19 +678,14 @@ class Agent(AgentBase):
 						data_off['curr_skills'] = c_off_curr
 						data_off['has_gt_skill'] = 0.0 * data_off['has_gt_skill']
 						
-						# [Broadcast] Allocate trajectory probability to each time step in the trajectory
-						traj_log_probs_off = tf.reshape(
-							tf.repeat(traj_log_probs_off, repeats=self.args.horizon, axis=0),
-							shape=(traj_log_probs_off.shape[0], self.args.horizon)
+						# Define skill-decode confidence as the probability clipped to the interval
+						data_exp['skill_dec_confidence'] = tf.clip_by_value(
+							trans_probs_exp, self.args.skill_dec_conf_interval[0], self.args.skill_dec_conf_interval[1]
 						)
-						
-						traj_log_probs_exp = tf.reshape(
-							tf.repeat(traj_log_probs_exp, repeats=self.args.horizon, axis=0),
-							shape=(traj_log_probs_exp.shape[0], self.args.horizon)
+						data_off['skill_dec_confidence'] = tf.clip_by_value(
+							trans_probs_off, self.args.skill_dec_conf_interval[0], self.args.skill_dec_conf_interval[1]
 						)
-						
-						data_exp['skill_dec_confidence'] = tf.math.exp(traj_log_probs_exp)
-						data_off['skill_dec_confidence'] = tf.math.exp(traj_log_probs_off)
+					
 					
 					# Load the updated expert data into the expert buffer
 					self.expert_buffer.load_data_into_buffer(buffered_data=data_exp, clear_buffer=True)

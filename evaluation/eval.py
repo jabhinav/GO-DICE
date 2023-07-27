@@ -1,7 +1,7 @@
 import os
 import random
 from collections import Counter
-from typing import Optional, List, Dict, Union
+from typing import Optional, List
 
 import numpy as np
 import tensorflow as tf
@@ -9,7 +9,6 @@ import tensorflow as tf
 from her.rollout import RolloutWorker
 from utils.custom import logger
 from utils.env import save_env_img
-
 
 # from domains.stackBoxWorld import _find, stackBoxWorld
 # from utils.misc import causally_parse_dynamic_data_v2, one_hot_encode

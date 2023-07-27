@@ -9,20 +9,39 @@ def get_DICE_args(log_dir, db=False):
 	
 	parser.add_argument('--log_wandb', type=bool, default=not db)
 	# parser.add_argument('--log_wandb', type=bool, default=False)
-	parser.add_argument('--wandb_project', type=str, default='offlineILPnPDEBUGExp',
-						choices=['offlineILPnPOne', 'offlineILPnPOneExp', 'offlineILPnPTwoExp', 'offlineILPnPDEBUG'])
+	parser.add_argument('--wandb_project', type=str, default='offlineILPnPTwoExp',
+						choices=['offlineILPnPOne', 'offlineILPnPOneExp', 'offlineILPnPTwoExp', 'offlineILPnPDEBUGExp'])
 	
-	parser.add_argument('--expert_demos', type=int, default=25)
-	parser.add_argument('--offline_demos', type=int, default=75)
-	parser.add_argument('--eval_demos', type=int, default=1 if db else 10,
-						help='Use 10 (num of demos to evaluate trained pol)')
-	parser.add_argument('--test_demos', type=int, default=0, help='For Visualisation')
-	parser.add_argument('--perc_train', type=int, default=1.0)
+	# Viterbi configuration
+	parser.add_argument('--skill_supervision', type=str, default='semi:0.10',
+						choices=['full:0.10', 'full', 'full:0.50',
+								 'semi:0.10', 'semi:0.25', 'semi:0.50', 'semi:0.50(conf)',
+								 'none'],
+						help='Type of supervision for latent skills. '
+							 'full: Use ground truth skills for offline data.'
+							 'semi:x: Use Viterbi to update latent skills for offline data.'
+							 'none: Use Viterbi to update latent skills for expert and offline data.')
+	parser.add_argument('--num_skills', type=int, default=None,
+						help='Number of skills to use for agent, if provided, will override expert skill set. '
+							 'Use when skill supervision is "none"')
+	parser.add_argument('--wrap_level', type=str, default='2', choices=['0', '1', '2'],
+						help='consumed by multi-object expert to determine how to wrap effective skills of expert'
+							 '0: No wrapping (obj0:pick-grab-drop, obj1:pick-grab-drop, ...), '
+							 '1: Wrap at skill level (pick-grab-drop), '
+							 '2: Wrap at object level (obj:0, obj:1, obj:2, ...)')
+	parser.add_argument('--skill_dec_conf_interval', type=list, default=[0.01, 1.0],
+						help='Confidence interval for skill decoder, used as multiplier for policy loss')
+	# parser.add_argument('--update_skills_interval', type=int, default=1,
+	# 					help='Number of time steps after which latent skills will be updated using Viterbi [Unused]')
 	
-
-	# parser.add_argument('--temp_min', type=float, default=0.01, help='Minimum temperature for Gumbel Softmax')
-	# parser.add_argument('--temp_max', type=float, default=10, help='Maximum temperature for Gumbel Softmax')
-	# parser.add_argument('--temp_decay', type=float, default=0.0005, help='Temperature decay for Gumbel Softmax')
+	# Specify Data Collection Configuration
+	parser.add_argument('--expert_demos', type=int, default=10)
+	parser.add_argument('--offline_demos', type=int, default=90)
+	parser.add_argument('--eval_demos', type=int, default=1 if db else 10)
+	parser.add_argument('--test_demos', type=int, default=0)
+	parser.add_argument('--perc_train', type=float, default=1.0)
+	parser.add_argument('--buffer_size', type=int, default=int(2e5),
+						help='Number of transitions to store in buffer (max_time_steps)')
 	
 	# Specify Environment Configuration
 	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
@@ -38,10 +57,6 @@ def get_DICE_args(log_dir, db=False):
 	parser.add_argument('--fix_object', type=bool, default=False,
 						help='[Debugging] Fix the object position for one object task')
 	
-	# Specify Data Collection Configuration
-	parser.add_argument('--buffer_size', type=int, default=int(2e5),
-						help='Number of transitions to store in buffer (max_time_steps)')
-	
 	# Specify Training configuration
 	parser.add_argument('--max_pretrain_time_steps', type=int, default=0 if not db else 0,
 						help='No. of time steps to run pretraining - actor, director on expert data. Set to 0 to skip')
@@ -53,37 +68,14 @@ def get_DICE_args(log_dir, db=False):
 						choices=['random_unsegmented', 'random_segmented'],
 						help='How to sample transitions from expert buffer')
 	
-	# For Off-Policy or On-Policy (Unused by Offline)
-	# parser.add_argument('--start_training_timesteps', type=int, default=0,
-	# 					help='Number of time steps before starting training')
-	# parser.add_argument('--updates_per_step', type=int, default=1,
-	# 					help='Number of updates per time step')
-	# parser.add_argument('--num_random_actions', type=int, default=1,
-	# 					help='Number of steps to explore and then exploit - 2e3. For on/off-policy, only!')
-	
-	# Viterbi configuration
-	parser.add_argument('--skill_supervision', type=str, default='full',
-						choices=['full', 'semi:0.10', 'semi:0.25', 'semi:0.50', 'none'],
-						help='Type of supervision for latent skills. '
-							 'full: Use ground truth skills for offline data.'
-							 'semi:x: Use Viterbi to update latent skills for offline data.'
-							 'none: Use Viterbi to update latent skills for expert and offline data.')
-	parser.add_argument('--num_skills', type=int, default=None,
-						help='Number of skills to use for agent, if provided, will override expert skill set. '
-							 'Use when skill supervision is "none"')
-	parser.add_argument('--wrap_level', type=str, default='0', choices=['0', '1', '2'],
-						help='consumed by multi-object expert to determine how to wrap effective skills of expert')
-	# parser.add_argument('--update_skills_interval', type=int, default=1,
-	# 					help='Number of time steps after which latent skills will be updated using Viterbi [Unused]')
-	
 	# Polyak
-	parser.add_argument('--update_target_interval', type=int, default=20,
+	parser.add_argument('--update_target_interval', type=int, default=50,
 						help='Number of time steps after which target networks will be updated using polyak averaging')
-	parser.add_argument('--actor_polyak', type=float, default=0.95,
+	parser.add_argument('--actor_polyak', type=float, default=0.50,
 						help='Polyak averaging coefficient for actor.')
-	parser.add_argument('--director_polyak', type=float, default=0.95,
+	parser.add_argument('--director_polyak', type=float, default=0.50,
 						help='Polyak averaging coefficient for director.')
-	parser.add_argument('--critic_polyak', type=float, default=0.95,
+	parser.add_argument('--critic_polyak', type=float, default=0.50,
 						help='Polyak averaging coefficient for critic.')
 	
 	# Evaluation
@@ -115,6 +107,18 @@ def get_DICE_args(log_dir, db=False):
 						help='Provide the <path_to_models>')
 	parser.add_argument('--dir_pre', type=str, default='./pretrained_models',
 						help='Provide the <path_to_models>')
+	
+	# parser.add_argument('--temp_min', type=float, default=0.01, help='Minimum temperature for Gumbel Softmax')
+	# parser.add_argument('--temp_max', type=float, default=10, help='Maximum temperature for Gumbel Softmax')
+	# parser.add_argument('--temp_decay', type=float, default=0.0005, help='Temperature decay for Gumbel Softmax')
+	
+	# For Off-Policy or On-Policy (Unused by Offline)
+	# parser.add_argument('--start_training_timesteps', type=int, default=0,
+	# 					help='Number of time steps before starting training')
+	# parser.add_argument('--updates_per_step', type=int, default=1,
+	# 					help='Number of updates per time step')
+	# parser.add_argument('--num_random_actions', type=int, default=1,
+	# 					help='Number of steps to explore and then exploit - 2e3. For on/off-policy, only!')
 	
 	args = parser.parse_args()
 	
