@@ -195,7 +195,7 @@ def main():
 	
 	logger.info("# ################# Verifying ################# #")
 	
-	args = get_DICE_args(log_dir, db=True)
+	args = get_DICE_args(log_dir, debug=True)
 	args.algo = 'SkilledDemoDICE'
 	args.log_dir = log_dir
 	args.log_wandb = False
