@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 
 
-class skilledDemoDICE(tf.keras.Model, ABC):
+class GODICE(tf.keras.Model, ABC):
 	def __init__(self, args: Namespace):
-		super(skilledDemoDICE, self).__init__()
+		super(GODICE, self).__init__()
 		self.args = args
 
 		self.args.EPS = np.finfo(np.float32).eps  # Small value = 1.192e-07 to avoid division by zero in grad penalty
@@ -457,7 +457,7 @@ class Agent(AgentBase):
 				 expert_buffer: ReplayBufferTf = None,
 				 offline_buffer: ReplayBufferTf = None):
 		
-		super().__init__(args, skilledDemoDICE(args), 'skilledDemoDICE', expert_buffer, offline_buffer)
+		super().__init__(args, GODICE(args), 'skilledDemoDICE', expert_buffer, offline_buffer)
 	
 	def load_actor(self, dir_param):
 		self.model.skilled_actors.load_weights(dir_param + "/policy.h5")
@@ -650,7 +650,7 @@ class Agent(AgentBase):
 						# Update the offline buffer with the viterbi decoded skill sequence
 						data_off['prev_skills'] = c_off_prev
 						data_off['curr_skills'] = c_off_curr
-						data_off['has_gt_skill'] = 0.0 * data_off['has_gt_skill']
+						# data_off['has_gt_skill'] = 0.0 * data_off['has_gt_skill']
 
 						# Define skill-decode confidence as the probability clipped to the interval
 						data_off['skill_dec_confidence'] = tf.clip_by_value(
@@ -658,7 +658,7 @@ class Agent(AgentBase):
 						)
 						
 					# Unsupervised latent skills: Update expert and offline skills
-					elif self.args.skill_supervision == 'none':
+					elif 'none' in self.args.skill_supervision:
 						decoding_start_time = time.time()
 						vit_res_exp, c_exp_prev, c_exp_curr, traj_log_probs_exp, trans_probs_exp = self.infer_skills(
 							data_exp, c_exp_curr_gt, compute_viterbi_acc=args.c_dim == c_gt_dim
@@ -671,12 +671,12 @@ class Agent(AgentBase):
 						# Update the expert buffer with the viterbi decoded skill sequence
 						data_exp['prev_skills'] = c_exp_prev
 						data_exp['curr_skills'] = c_exp_curr
-						data_exp['has_gt_skill'] = 0.0 * data_exp['has_gt_skill']
+						# data_exp['has_gt_skill'] = 0.0 * data_exp['has_gt_skill']
 						
 						# Update the offline buffer with the viterbi decoded skill sequence
 						data_off['prev_skills'] = c_off_prev
 						data_off['curr_skills'] = c_off_curr
-						data_off['has_gt_skill'] = 0.0 * data_off['has_gt_skill']
+						# data_off['has_gt_skill'] = 0.0 * data_off['has_gt_skill']
 						
 						# Define skill-decode confidence as the probability clipped to the interval
 						data_exp['skill_dec_confidence'] = tf.clip_by_value(

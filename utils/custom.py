@@ -95,3 +95,15 @@ def repurpose_skill_seq(args, skill_seq):
 		return skill_seq
 	else:
 		raise NotImplementedError("Invalid value for wrap_skill_id: {}".format(args.wrap_level))
+	
+	
+def convert_tf_to_numpy(x):
+	"""
+	Converts a tf.Tensor or Dict[str, tf.Tensor] to np.array or Dict[str, np.array]
+	:param x: tf.Tensor or Dict[str, tf.Tensor]
+	:return: np.array or Dict[str, np.array]
+	"""
+	if isinstance(x, dict):
+		return {k: v.numpy() if isinstance(v, tf.Tensor) else v for k, v in x.items()}
+	else:
+		return x.numpy() if isinstance(x, tf.Tensor) else x

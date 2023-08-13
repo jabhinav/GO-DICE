@@ -16,11 +16,13 @@ from configs.DICE import get_DICE_args
 from her.replay_buffer import ReplayBufferTf
 from her.transitions import sample_transitions
 from models.demoDICE import Agent as Agent_demoDICE
-from models.skilledDemoDICE import Agent as Agent_skilledDemoDICE
+from models.GODICE import Agent as Agent_GODICE
 from models.GoFar import Agent as Agent_GoFar
 from models.BC import Agent as Agent_BC
+from models.Expert import Agent as Agent_Expert
 from utils.buffer import get_buffer_shape
 from utils.custom import state_to_goal, repurpose_skill_seq
+from forced_configs import get_multiple_configs
 
 
 get_config = {
@@ -30,6 +32,7 @@ get_config = {
 	'DemoDICE': get_DICE_args,
 	'GoFar': get_DICE_args,
 	'SkilledDemoDICE': get_DICE_args,
+	'Expert': get_DICE_args,
 }
 
 Agents = {
@@ -38,7 +41,8 @@ Agents = {
 	# 'ValueDICE': run_valueDICE,
 	'DemoDICE': Agent_demoDICE,
 	'GoFar': Agent_GoFar,
-	'SkilledDemoDICE': Agent_skilledDemoDICE,
+	'SkilledDemoDICE': Agent_GODICE,
+	'Expert': Agent_Expert,
 }
 
 
@@ -115,7 +119,7 @@ def verify(algo: str):
 		)
 
 
-def run(debug: bool, algo: str):
+def run(debug: bool, algo: str, forced_config: dict = None):
 	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 	
 	# Set the random seeds randomly for more randomness
@@ -125,12 +129,15 @@ def run(debug: bool, algo: str):
 	if debug:
 		print("Running in Debug Mode. (db=True)")
 	
-	tf.config.run_functions_eagerly(debug)
+	tf.config.run_functions_eagerly(True)
 	
 	log_dir = os.path.join('./logging', algo, '{}'.format('debug' if debug else 'run') + current_time)
 	if not os.path.exists(log_dir):
 		os.makedirs(log_dir, exist_ok=True)
 	
+	# First clear previous logging configurations to create new logs for each run
+	for handler in logging.root.handlers[:]:
+		logging.root.removeHandler(handler)
 	logging.basicConfig(filename=os.path.join(log_dir, 'logs.txt'), filemode='w',
 						format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
 						datefmt='%m/%d/%Y %H:%M:%S',
@@ -139,25 +146,15 @@ def run(debug: bool, algo: str):
 	
 	logger.info("# ################# Working on Model: \"{}\" ################# #".format(algo))
 	
-	args = get_config[algo](log_dir, db=debug)
-	args.algo = algo
+	args = get_config[algo](algo, log_dir, debug=debug, forced_config=forced_config)
 	args.log_dir = log_dir
 	
 	logger.info("---------------------------------------------------------------------------------------------")
 	config: dict = vars(args)
 	config = {key: str(value) for key, value in config.items()}
 	config = OrderedDict(sorted(config.items()))
-	logger.info(json.dumps(config, indent=4))
 	
-	# # For Debugging [#2]
-	# if args.fix_goal and args.fix_object:
-	# 	data_prefix = 'fOfG_'
-	# elif args.fix_goal and not args.fix_object:
-	# 	data_prefix = 'dOfG_'
-	# elif args.fix_object and not args.fix_goal:
-	# 	data_prefix = 'fOdG_'
-	# else:
-	# 	data_prefix = 'dOdG_'
+	logger.info(json.dumps(config, indent=4))
 	
 	# Clear tensorflow graph and cache
 	tf.keras.backend.clear_session()
@@ -197,8 +194,10 @@ def run(debug: bool, algo: str):
 	expert_data_path = os.path.join(args.dir_data, expert_data_file)
 	if args.wandb_project.endswith('Exp'):
 		offline_data_path = os.path.join(args.dir_data, expert_data_file)  # For EXP
+		print("Using Perfect Expert Data for Offline Data from {}".format(expert_data_path))
 	else:
 		offline_data_path = os.path.join(args.dir_data, offline_data_file)
+		print("Using Imperfect Data for Offline Data from {}".format(offline_data_path))
 	
 	if not os.path.exists(expert_data_path):
 		logger.error("Expert data not found at {}. Please run the data generation script first.".format(expert_data_path))
@@ -245,18 +244,21 @@ def run(debug: bool, algo: str):
 	
 	agent = Agents[args.algo](args, expert_buffer, offline_buffer)
 	
-	# logger.info("Load Actor Policy from {}".format(args.dir_pre))
-	# agent.load_actor(dir_param=args.dir_pre)
-	# print("Actor Loaded")
-	
 	logger.info("Training .......")
 	agent.learn()
 	logger.info("Done Training in {}".format(str(datetime.timedelta(seconds=time.time() - start))))
 
 
 if __name__ == "__main__":
+	# _forced_configs = get_multiple_configs()
+	# for _config in _forced_configs:
+	# 	print("Running with Config: {}".format(_config))
+	# 	num_runs = 5
+	# 	for i in range(num_runs):
+	# 		run(debug=False, algo=_config['algo'], forced_config=_config)
+	
 	num_runs = 5
 	for i in range(num_runs):
-		run(debug=False, algo='SkilledDemoDICE')
+		run(debug=False, algo='Expert')
 	# verify(algo='SkilledDemoDICE')
 

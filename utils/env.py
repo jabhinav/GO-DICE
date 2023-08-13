@@ -15,7 +15,7 @@ def save_env_img(env: MyPnPEnvWrapper, path_to_save="./env_curr_state.png"):
 	im.save(path_to_save)
 
 
-def get_config_env(args, ag_in_env_goal):
+def add_env_config(args, ag_in_env_goal):
 	"""
 	:param args: Namespace object
 	:param ag_in_env_goal: If True, then achieved goal is in the same space as env goal

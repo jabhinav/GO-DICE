@@ -11,6 +11,7 @@ from her.replay_buffer import ReplayBufferTf
 from her.rollout import RolloutWorker
 from evaluation.eval import evaluate_worker
 from utils.env import get_PnP_env
+from utils.custom import convert_tf_to_numpy
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +212,16 @@ class AgentBase(object):
 		
 		avg_return, avg_time, avg_goal_dist, avg_perc_dec, avg_subgoal_achievement_reward, \
 			avg_subgoals_achieved, avg_subgoals_dist = evaluate_worker(self.eval_worker, self.args.eval_demos,
-																	   subgoal_reward=self.args.subgoal_reward)
+																	   subgoal_reward=self.args.subgoal_reward,
+																	   num_objs=self.args.num_objs)
+		
+		# avg_return = convert_tf_to_numpy(avg_return)
+		# avg_time = convert_tf_to_numpy(avg_time)
+		# avg_goal_dist = convert_tf_to_numpy(avg_goal_dist)
+		# avg_perc_dec = convert_tf_to_numpy(avg_perc_dec)
+		# avg_subgoal_achievement_reward = convert_tf_to_numpy(avg_subgoal_achievement_reward)
+		# avg_subgoals_achieved = convert_tf_to_numpy(avg_subgoals_achieved)
+		# avg_subgoals_dist = convert_tf_to_numpy(avg_subgoals_dist)
 		
 		if max_return is None:
 			max_return = avg_return

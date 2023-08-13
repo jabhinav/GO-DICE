@@ -52,23 +52,33 @@ class BC(tf.keras.Model, ABC):
 		# For HER
 		self.use_her = False
 		logger.info('[[[ Using HER ? ]]]: {}'.format(self.use_her))
+		
+		# Beta
+		self.beta = self.args.BC_beta
 	
 	@tf.function(experimental_relax_shapes=True)
 	def train(self, data_exp, data_rb):
 		with tf.GradientTape(watch_accessed_variables=False, persistent=True) as tape:
 			tape.watch(self.actor.variables)
 			
+			# On Offline Data
 			actions_mu, _, _ = self.actor(tf.concat([data_rb['states'], data_rb['goals']], axis=1))
-			pi_loss = tf.reduce_sum(tf.math.squared_difference(data_rb['actions'], actions_mu), axis=-1)
-			pi_loss = tf.reduce_mean(pi_loss)
+			pi_loss_offline = tf.reduce_sum(tf.math.squared_difference(data_rb['actions'], actions_mu), axis=-1)
+			pi_loss_offline = tf.reduce_mean(pi_loss_offline)
+			
+			# On Expert Data
+			actions_mu, _, _ = self.actor(tf.concat([data_exp['states'], data_exp['goals']], axis=1))
+			pi_loss_expert = tf.reduce_sum(tf.math.squared_difference(data_exp['actions'], actions_mu), axis=-1)
+			pi_loss_expert = tf.reduce_mean(pi_loss_expert)
+			
 			penalty = orthogonal_regularization(self.actor.base)
-			pi_loss_w_penalty = pi_loss + penalty
+			pi_loss_w_penalty = self.beta * pi_loss_offline + (1 - self.beta) * pi_loss_expert + penalty
 		
 		grads = tape.gradient(pi_loss_w_penalty, self.actor.trainable_variables)
 		self.actor_optimizer.apply_gradients(zip(grads, self.actor.trainable_variables))
 		
 		return {
-			'loss/pi': pi_loss,
+			'loss/pi': pi_loss_offline,
 			'penalty/pi_ortho_penalty': penalty,
 		}
 	

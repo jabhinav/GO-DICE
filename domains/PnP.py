@@ -1,6 +1,7 @@
 import collections
 import logging
 from typing import Tuple, Dict, Union
+import tensorflow as tf
 
 import numpy as np
 
@@ -294,7 +295,7 @@ class MyPnPEnvWrapper(PnPEnv):
 	def _random_action(self, n):
 		action_max = float(super(MyPnPEnvWrapper, self).action_space.high[0])
 		return np.random.uniform(low=-action_max, high=action_max, size=(n, 4))
-
+	
 	def get_subgoal_info(self) -> Tuple[Dict[str, int], Dict[str, float]]:
 		"""
 		:return: a dictionary of subgoal info i.e. sub goal name and whether it is achieved along with distances in each
@@ -314,3 +315,24 @@ class MyPnPEnvWrapper(PnPEnv):
 			subgoal_distances['subgoals/place/{}'.format(key)] = value
 		
 		return subgoal_info, subgoal_distances
+	
+	def get_subgoal_info_listed(self):
+		all_info = []
+		
+		for _obj in range(self.num_objs):
+			# Pick subgoal
+			all_info.append(
+				np.array(self.pick_sub_goals_achieved[_obj], dtype=np.float32)
+			)
+			# Place subgoal
+			all_info.append(
+				np.array(self.place_sub_goals_achieved[_obj], dtype=np.float32)
+			)
+			# Place subgoal distance
+			all_info.append(
+				np.array(self.place_sub_goals_distances[_obj], dtype=np.float32)
+			)
+			
+		# Now return all elements as separate objects
+		return all_info
+	

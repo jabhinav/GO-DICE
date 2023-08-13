@@ -13,7 +13,7 @@ from domains.PnPExpert import PnPExpertOneObjImitator, PnPExpertTwoObjImitator, 
 from her.rollout import RolloutWorker
 from her.replay_buffer import ReplayBufferTf
 from utils.plot import plot_metrics
-from utils.env import get_config_env
+from utils.env import add_env_config
 from collections import OrderedDict
 
 # # WARNING: For generating data, tf must be run eagerly
@@ -165,7 +165,7 @@ if __name__ == '__main__':
 	_args = parser.parse_args()
 	
 	# Load the environment config
-	_args = get_config_env(_args, ag_in_env_goal=True)
+	_args = add_env_config(_args, ag_in_env_goal=True)
 	
 	logger.info("---------------------------------------------------------------------------------------------")
 	config: dict = vars(_args)

@@ -1,30 +1,33 @@
 import argparse
 import os
 
-from utils.env import get_config_env
+from utils.env import add_env_config
 
 
-def get_DICE_args(log_dir, db=False):
+def get_DICE_args(algo: str, log_dir: str, debug: bool = False, forced_config: dict = None):
 	parser = argparse.ArgumentParser()
 	
-	parser.add_argument('--log_wandb', type=bool, default=not db)
+	parser.add_argument('--algo', type=str, default=algo, choices=['BC', 'GoFar', 'DemoDICE', 'SkilledDemoDICE',
+																   'Expert'])
+	parser.add_argument('--log_wandb', type=bool, default=not debug)
 	# parser.add_argument('--log_wandb', type=bool, default=False)
-	parser.add_argument('--wandb_project', type=str, default='offlineILPnPTwoExp',
-						choices=['offlineILPnPOne', 'offlineILPnPOneExp', 'offlineILPnPTwoExp', 'offlineILPnPDEBUGExp'])
+	parser.add_argument('--wandb_project', type=str, default='offlineILPnPOne0.10',
+						choices=['offlineILPnPOne', 'offlineILPnPOne0.10',
+								 'offlineILPnPOneExp',
+								 'offlineILPnPTwoExp',
+								 'offlineILPnPDEBUG', 'offlineILPnPDEBUGExp'])
 	
 	# Viterbi configuration
-	parser.add_argument('--skill_supervision', type=str, default='semi:0.10',
-						choices=['full:0.10', 'full', 'full:0.50',
-								 'semi:0.10', 'semi:0.25', 'semi:0.50', 'semi:0.50(conf)',
-								 'none'],
+	parser.add_argument('--skill_supervision', type=str, default='none',
+						choices=['full', 'semi', 'none'],
 						help='Type of supervision for latent skills. '
 							 'full: Use ground truth skills for offline data.'
-							 'semi:x: Use Viterbi to update latent skills for offline data.'
+							 'semi: Use Viterbi to update latent skills for offline data.'
 							 'none: Use Viterbi to update latent skills for expert and offline data.')
-	parser.add_argument('--num_skills', type=int, default=None,
+	parser.add_argument('--num_skills', type=int, default=3,
 						help='Number of skills to use for agent, if provided, will override expert skill set. '
-							 'Use when skill supervision is "none"')
-	parser.add_argument('--wrap_level', type=str, default='2', choices=['0', '1', '2'],
+							 'Used when skill supervision is "none"')
+	parser.add_argument('--wrap_level', type=str, default='0', choices=['0', '1', '2'],
 						help='consumed by multi-object expert to determine how to wrap effective skills of expert'
 							 '0: No wrapping (obj0:pick-grab-drop, obj1:pick-grab-drop, ...), '
 							 '1: Wrap at skill level (pick-grab-drop), '
@@ -37,17 +40,16 @@ def get_DICE_args(log_dir, db=False):
 	# Specify Data Collection Configuration
 	parser.add_argument('--expert_demos', type=int, default=10)
 	parser.add_argument('--offline_demos', type=int, default=90)
-	parser.add_argument('--eval_demos', type=int, default=1 if db else 10)
-	parser.add_argument('--test_demos', type=int, default=0)
 	parser.add_argument('--perc_train', type=float, default=1.0)
 	parser.add_argument('--buffer_size', type=int, default=int(2e5),
 						help='Number of transitions to store in buffer (max_time_steps)')
 	
 	# Specify Environment Configuration
-	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
-	parser.add_argument('--num_objs', type=int, default=2)
-	parser.add_argument('--horizon', type=int, default=150,
+	num_objs = 1
+	parser.add_argument('--num_objs', type=int, default=num_objs)
+	parser.add_argument('--horizon', type=int, default=100 if num_objs == 1 else 150 if num_objs == 2 else 250,
 						help='Set 100 for one_obj, 150 for two_obj')
+	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
 	parser.add_argument('--stacking', type=bool, default=False)
 	parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0'],
 						help='Expert behaviour in two_object env')
@@ -58,35 +60,37 @@ def get_DICE_args(log_dir, db=False):
 						help='[Debugging] Fix the object position for one object task')
 	
 	# Specify Training configuration
-	parser.add_argument('--max_pretrain_time_steps', type=int, default=0 if not db else 0,
+	parser.add_argument('--max_pretrain_time_steps', type=int, default=0 if not debug else 0,
 						help='No. of time steps to run pretraining - actor, director on expert data. Set to 0 to skip')
-	parser.add_argument('--max_time_steps', type=int, default=10000 if not db else 100,
+	parser.add_argument('--max_time_steps', type=int, default=10000 if not debug else 100,
 						help='No. of time steps to run. Recommended 5k for one_obj, 10k for two_obj')
-	parser.add_argument('--batch_size', type=int, default=6 * 256,
+	parser.add_argument('--batch_size', type=int, default=3 * num_objs * 256,
 						help='No. of trans to sample from buffer for each update')
 	parser.add_argument('--trans_style', type=str, default='random_unsegmented',
 						choices=['random_unsegmented', 'random_segmented'],
 						help='How to sample transitions from expert buffer')
 	
 	# Polyak
-	parser.add_argument('--update_target_interval', type=int, default=50,
+	parser.add_argument('--update_target_interval', type=int, default=20,
 						help='Number of time steps after which target networks will be updated using polyak averaging')
-	parser.add_argument('--actor_polyak', type=float, default=0.50,
+	parser.add_argument('--actor_polyak', type=float, default=0.95,
 						help='Polyak averaging coefficient for actor.')
-	parser.add_argument('--director_polyak', type=float, default=0.50,
+	parser.add_argument('--director_polyak', type=float, default=0.95,
 						help='Polyak averaging coefficient for director.')
-	parser.add_argument('--critic_polyak', type=float, default=0.50,
+	parser.add_argument('--critic_polyak', type=float, default=0.95,
 						help='Polyak averaging coefficient for critic.')
 	
 	# Evaluation
+	parser.add_argument('--eval_demos', type=int, default=1 if debug else 10)
+	parser.add_argument('--test_demos', type=int, default=0)
 	parser.add_argument('--eval_interval', type=int, default=100)
 	parser.add_argument('--visualise_test', type=bool, default=False, help='Visualise test episodes?')
 	parser.add_argument('--subgoal_reward', type=int, default=1, help='Reward for achieving subgoals')
 	
-	# # Parameters
-	parser.add_argument('--discount', type=float, default=0.99, help='Discount used for returns.')
-	parser.add_argument('--replay_regularization', type=float, default=0.05,
+	# # DICE Parameters
+	parser.add_argument('--replay_regularization', type=float, default=0.5,
 						help='Replay Regularization Coefficient. Used by both ValueDICE (0.1) and DemoDICE (0.05)')
+	parser.add_argument('--discount', type=float, default=0.99, help='Discount used for returns.')
 	parser.add_argument('--nu_grad_penalty_coeff', type=float, default=1e-4,
 						help='Nu Net Gradient Penalty Coefficient. ValueDICE uses 10.0, DemoDICE uses 1e-4')
 	parser.add_argument('--cost_grad_penalty_coeff', type=float, default=10,
@@ -96,6 +100,10 @@ def get_DICE_args(log_dir, db=False):
 	parser.add_argument('--disc_lr', type=float, default=3e-4)
 	parser.add_argument('--clip_obs', type=float, default=200.0,
 						help='Un-normalised i.e. raw Observed Values (State and Goals) are clipped to this value')
+	
+	# # BC specific parameters
+	parser.add_argument('--BC_beta', type=float, default=0.0,
+						help='Coefficient for BC Loss on Offline relative to Expert. Set to 1 for only offline data')
 	
 	# Specify Path Configurations
 	parser.add_argument('--dir_data', type=str, default='./pnp_data')
@@ -122,20 +130,29 @@ def get_DICE_args(log_dir, db=False):
 	
 	args = parser.parse_args()
 	
+	# Update the args with forced_config
+	if forced_config is not None:
+		for key, value in forced_config.items():
+			assert hasattr(args, key), f'Forced config key {key} not found in args'
+			setattr(args, key, value)
+	
 	# Load the environment config
-	args = get_config_env(args, ag_in_env_goal=True)
+	args = add_env_config(args, ag_in_env_goal=True)
 	
 	# Other Configurations
 	args.train_demos = int(args.expert_demos * args.perc_train)
 	args.val_demos = args.expert_demos - args.train_demos
 	
 	# Set number of skills [For unsupervised skill learning]
-	if args.num_skills is not None and args.skill_supervision == 'none':
+	if args.num_skills is not None and \
+			'none' in args.skill_supervision:
 		print('Overriding c_dim with specified %d skills' % args.num_skills)
 		args.c_dim = args.num_skills
 	
 	# Set number of skills [For full or semi-supervised skill learning]
-	if args.env_name == 'OpenAIPickandPlace' and args.wrap_level != '0' and args.skill_supervision != 'none':
+	if args.env_name == 'OpenAIPickandPlace' and \
+			args.wrap_level != '0' and \
+			'none' not in args.skill_supervision:
 		print('Overriding c_dim based on Wrap Level %s' % args.wrap_level)
 		if args.wrap_level == '1':
 			args.c_dim = 3
