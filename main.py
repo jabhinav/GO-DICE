@@ -53,7 +53,7 @@ def verify(algo: str):
 	np.random.seed(int(time.time()))
 	tf.random.set_seed(int(time.time()))
 	
-	tf.config.run_functions_eagerly(True)
+	tf.config.run_functions_eagerly(False)
 	
 	log_dir = os.path.join('./logging', 'verify' + current_time)
 	if not os.path.exists(log_dir):
@@ -96,7 +96,7 @@ def verify(algo: str):
 		
 		args.log_dir = log_dir
 		args.log_wandb = False
-		args.visualise_test = True
+		args.visualise_test = False
 		
 		# ############################################# Verifying ################################################## #
 		agent = Agents[algo](args)
@@ -112,12 +112,90 @@ def verify(algo: str):
 		# 		resume_states.append(pickle.load(file))
 		
 		agent.visualise(
-			use_expert_skill=False,
+			use_expert_options=False,
 			use_expert_action=False,
 			resume_states=None,
 			num_episodes=5,
 		)
 
+
+def evaluate(algo: str, num_eval_demos=100):
+	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+	
+	# Set the random seeds randomly for more randomness
+	np.random.seed(int(time.time()))
+	tf.random.set_seed(int(time.time()))
+	
+	tf.config.run_functions_eagerly(False)
+	
+	log_dir = os.path.join('./logging', 'evaluate' + current_time)
+	if not os.path.exists(log_dir):
+		os.makedirs(log_dir, exist_ok=True)
+	
+	logging.basicConfig(filename=os.path.join(log_dir, 'logs.txt'), filemode='w',
+						format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+						datefmt='%m/%d/%Y %H:%M:%S',
+						level=logging.INFO)
+	logger = logging.getLogger(__name__)
+	
+	logger.info("# ################# Evaluating ################# #")
+	
+	args = get_config[algo](algo, log_dir, debug=False, forced_config=None)
+	args.log_dir = log_dir
+	args.log_wandb = False
+	args.visualise_test = False
+	
+	logger.info("---------------------------------------------------------------------------------------------")
+	config: dict = vars(args)
+	config = {key: str(value) for key, value in config.items()}
+	config = OrderedDict(sorted(config.items()))
+	
+	logger.info(json.dumps(config, indent=4))
+	
+	# Clear tensorflow graph and cache
+	tf.keras.backend.clear_session()
+	tf.compat.v1.reset_default_graph()
+	
+	# List Model Directories
+	model_dirs = []
+	for root, dirs, files in os.walk('./logging/offlineILPnPTwoExp/GODICE_semi(0.25)_6'):
+		for name in dirs:
+			if 'run' in name:
+				model_dirs.append(os.path.join(root, name, 'models'))
+	
+	agent = Agents[args.algo](args)
+	
+	# # To evaluate expert's low level policy with learned option transitions. The way experts are implemented for PnP
+	# # tasks uses the same logic of Pick-Grab-Drop across multiple objects. So we can get by using the n-object Agent
+	# # with expert assist. For any other implementation, would need to use zero_shot script which targets at one-obj
+	# # low level policy reuse in higher order tasks
+	agent.model.act_w_expert_action = True
+	logger.info("IMP: Evaluating Expert's Low Level Policy with Learned Option Transitions")
+	
+	multi_model_returns = []
+	for model_dir in model_dirs:
+		logger.info("---------------------------------------------------------------------------------------------")
+		logger.info("Evaluating Model: {}".format(model_dir))
+		
+		agent.load_model(dir_param=model_dir)
+		
+		# Average Return across multiple episodes
+		avg_return, std_dev_return = agent.compute_avg_return(eval_demos=num_eval_demos, avg_of_reward=True)
+		multi_model_returns.append(avg_return)
+		
+		# Option Activation across multiple episodes
+		agent.args.dir_plot = os.path.join(agent.args.log_dir, 'plots_' + os.path.basename(os.path.dirname(model_dir)))
+		agent.evaluate_trajectory_option_activation(eval_demos=num_eval_demos)
+	
+	logger.info("Average Returns across multiple models: {}+={}".format(
+		np.mean(multi_model_returns),
+		np.std(multi_model_returns))
+	)
+	print("Average Returns across multiple models: {} +- {}".format(
+		np.mean(multi_model_returns),
+		np.std(multi_model_returns))
+	)
+	
 
 def run(debug: bool, algo: str, forced_config: dict = None):
 	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -129,7 +207,7 @@ def run(debug: bool, algo: str, forced_config: dict = None):
 	if debug:
 		print("Running in Debug Mode. (db=True)")
 	
-	tf.config.run_functions_eagerly(True)
+	tf.config.run_functions_eagerly(debug)
 	
 	log_dir = os.path.join('./logging', algo, '{}'.format('debug' if debug else 'run') + current_time)
 	if not os.path.exists(log_dir):
@@ -257,8 +335,10 @@ if __name__ == "__main__":
 	# 	for i in range(num_runs):
 	# 		run(debug=False, algo=_config['algo'], forced_config=_config)
 	
-	num_runs = 5
-	for i in range(num_runs):
-		run(debug=False, algo='Expert')
+	# num_runs = 1
+	# for i in range(num_runs):
+	# 	run(debug=False, algo='SkilledDemoDICE')
+	
+	evaluate(algo='SkilledDemoDICE')
 	# verify(algo='SkilledDemoDICE')
 

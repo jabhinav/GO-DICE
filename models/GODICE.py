@@ -251,7 +251,7 @@ class GODICE(tf.keras.Model, ABC):
 			if self.act_w_expert_action:
 				action = tf.numpy_function(
 					self.expert.sample_action,
-					[state[0], env_goal[0], curr_skill[0], action[0]],
+					[state[0], env_goal[0], curr_skill[0]],
 					tf.float32
 				)
 				action = tf.expand_dims(action, axis=0)
@@ -734,7 +734,7 @@ class Agent(AgentBase):
 		self.save_model(args.dir_param)
 
 		if args.test_demos > 0:
-			self.visualise(use_expert_skill=False)
+			self.visualise(use_expert_options=False)
 			# self.visualise(use_expert_skill=True)
 	
 		

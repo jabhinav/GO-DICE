@@ -218,4 +218,4 @@ class Agent(AgentBase):
 		self.save_model(args.dir_param)
 		
 		if args.test_demos > 0:
-			self.visualise(use_expert_skill=False)
+			self.visualise(use_expert_options=False)

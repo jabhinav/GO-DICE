@@ -7,9 +7,9 @@ import logging
 import tensorflow as tf
 import numpy as np
 from typing import Dict
-from utils.env import get_PnP_env
+from utils.env import get_PointMass_env
 from utils.buffer import get_buffer_shape
-from domains.PnPExpert import PnPExpertOneObjImitator, PnPExpertTwoObjImitator, PnPExpertMultiObjImitator
+from domains.PointMassDropNReachExpert import PointMassDropNReachExpert
 from her.rollout import RolloutWorker
 from her.replay_buffer import ReplayBufferTf
 from utils.plot import plot_metrics
@@ -31,54 +31,29 @@ logging.basicConfig(filename=os.path.join(log_dir, 'logs.txt'), filemode='w',
 logger = logging.getLogger(__name__)
 
 
-def merge_pick_grab(args, episode: Dict[str, tf.Tensor]):
-	# Each Tensor in episode is of shape (num_episodes, horizon, dim)
-	# Merge pick and drop into one skill and retain drop
+def run(args):
+	exp_env = get_PointMass_env(args)
+	buffer_shape = get_buffer_shape(args)
+	num_objs = 1.0
 	
-	# Case: 1
-	if args.wrap_skill_id == '0':
-		# combine pick and grab [1, 0, 0] -> [1] and [0, 1, 0] -> [1]
-		temp = episode['curr_skills'][:, :, 0] + episode['curr_skills'][:, :, 1]
-		episode['curr_skills'] = tf.stack([temp, episode['curr_skills'][:, :, 2]], axis=-1)
-		
-		temp = episode['prev_skills'][:, :, 0] + episode['prev_skills'][:, :, 1]
-		episode['prev_skills'] = tf.stack([temp, episode['prev_skills'][:, :, 2]], axis=-1)
-	
+	if num_objs == 1:
+		data_type = f'single_obj_{args.split_tag}'
 	else:
 		raise NotImplementedError
 	
-	return episode
-
-
-def run(args):
-	exp_env = get_PnP_env(args)
-	buffer_shape = get_buffer_shape(args)
-	num_objs = int(args.num_objs)
-	
-	if num_objs == 3:
-		data_type = f'three_obj_{args.expert_behaviour}_{args.split_tag}'
-	elif num_objs == 2:
-		data_type = f'two_obj_{args.expert_behaviour}_{args.split_tag}'
-	else:
-		data_type = f'single_obj_{args.split_tag}'
-	
-	data_path = os.path.join(args.dir, data_type + '.pkl')
-	env_state_dir = os.path.join(args.dir, f'{data_type}_env_states')
+	data_path = os.path.join(args.dir_data, data_type + '.pkl')
+	env_state_dir = os.path.join(args.dir_data, f'{data_type}_env_states')
 	if not os.path.exists(env_state_dir):
 		os.makedirs(env_state_dir)
-		
+	
 	# ############################################# EXPERT POLICY ############################################# #
-	num_skills = args.num_objs * 3
-	buffer_shape['prev_skills'] = (args.horizon, num_skills)
-	buffer_shape['curr_skills'] = (args.horizon, num_skills)
-	if num_objs >= 3:
-		expert_policy = PnPExpertMultiObjImitator(args)
-	elif num_objs == 2:
-		expert_policy = PnPExpertTwoObjImitator(args)
-	elif num_objs == 1:
-		expert_policy = PnPExpertOneObjImitator(args)
+	if num_objs == 1:
+		expert_policy = PointMassDropNReachExpert(args)
 	else:
 		raise NotImplementedError
+	num_skills = expert_policy.num_skills
+	buffer_shape['prev_skills'] = (args.horizon, num_skills)
+	buffer_shape['curr_skills'] = (args.horizon, num_skills)
 	
 	# Initiate a worker to generate expert rollouts
 	expert_worker = RolloutWorker(
@@ -94,6 +69,7 @@ def run(args):
 	logger.info("Generating {} Expert Demos for {}".format(args.split_tag, args.num_demos))
 	
 	n = 0
+	unsuccessful_count = 0
 	while n < args.num_demos:
 		tf.print("Generating {} Episode {}/{}".format(args.split_tag, n + 1, args.num_demos))
 		try:
@@ -102,20 +78,23 @@ def run(args):
 			tf.print("Episode Error! Generating another Episode.")
 			continue
 		
-		dist = np.linalg.norm(_episode['states'][0][-1][3:3+3*num_objs] - _episode['env_goals'][0][-1][:])
-		logger.info(f"({n}/{args.num_demos}) dist. to goal achieved = {round(dist, 4)}")
-		
 		# Check if episode is successful
 		if tf.math.equal(tf.argmax(_episode['successes'].numpy()[0]), 0) \
 				and args.random_eps == 0.0 and args.noise_eps == 0.0:  # If No noise or randomization
 			# Check the distance between the goal and the object
 			tf.print("Episode Unsuccessful! Generating another Episode.")
+			plot_metrics(
+				[_episode['distances'].numpy()[0]], labels=['|G_env - AG_curr|'],
+				fig_path=os.path.join(args.dir_root_log, 'Expert_{}_{}_{}.png'.format(data_type, n, unsuccessful_count)),
+				y_label='Metrics', x_label='Steps'
+			)
+			unsuccessful_count += 1
 			continue
 		else:
 			expert_buffer.store_episode(_episode)
 			plot_metrics(
 				[_episode['distances'].numpy()[0]], labels=['|G_env - AG_curr|'],
-				fig_path=os.path.join(args.dir, 'Expert_{}_{}.png'.format(data_type, n)),
+				fig_path=os.path.join(args.dir_root_log, 'Expert_{}_{}.png'.format(data_type, n)),
 				y_label='Metrics', x_label='Steps'
 			)
 			path_to_init_state_dict = tf.constant(os.path.join(env_state_dir, 'env_{}.pkl'.format(n)))
@@ -131,36 +110,27 @@ def run(args):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--num_demos', type=int, default=5)
+	parser.add_argument('--num_demos', type=int, default=100)
 	parser.add_argument('--split_tag', type=str, default='train')
-	parser.add_argument('--render', type=bool, default=True)
+	parser.add_argument('--render', type=bool, default=False)
 	
 	# Specify Environment Configuration
-	parser.add_argument('--env_name', type=str, default='OpenAIPickandPlace')
+	parser.add_argument('--env_name', type=str, default='MyPointMassDropNReach')
 	parser.add_argument('--full_space_as_goal', type=bool, default=False)
 	parser.add_argument('--num_objs', type=int, default=1)
-	parser.add_argument('--expert_behaviour', type=str, default='0', choices=['0', '1'],
-						help='Expert behaviour in multi-obj env. Note that 1 is the randomised behaviour which '
-							 'wont work in the stacking env because goals are suspended in the air and reaching them '
-							 'is impossible without stacking objects below. FIX: order of goal for the objects should '
-							 'be implemented in the env first, which then must be observed by the agent.')
-	parser.add_argument('--stacking', type=bool, default=False)
-	parser.add_argument('--fix_goal', type=bool, default=False,
-						help='[Debug] Fix the goal position for one object task')
-	parser.add_argument('--fix_object', type=bool, default=False,
-						help='[Debug] Fix the object position for one object task')
-	
+
 	# Specify Rollout Data Configuration
-	parser.add_argument('--horizon', type=int, default=100,
-						help='Set 100 for one_obj, 150 for two_obj and 200 for three_obj')
+	parser.add_argument('--horizon', type=int, default=30,
+						help='Set 100 for one maker')
 	parser.add_argument('--rollout_terminate', type=bool, default=False,
 						help='We retain the success flag=1 for states which satisfy goal condition,')
 	parser.add_argument('--buffer_size', type=int, default=int(1e6),
 						help='--')
-	parser.add_argument('--random_eps', type=float, default=0.0, help='random eps = 0.05')
-	parser.add_argument('--noise_eps', type=float, default=0.0, help='noise eps = 0.01')
+	parser.add_argument('--random_eps', type=float, default=0.1, help='random eps = 0.0')
+	parser.add_argument('--noise_eps', type=float, default=0.1, help='noise eps = 0.0')
 	
-	parser.add_argument('--dir', type=str, default=log_dir)
+	parser.add_argument('--dir_root_log', type=str, default=log_dir)
+	parser.add_argument('--dir_data', type=str, default=os.path.join(log_dir, 'data'))
 	_args = parser.parse_args()
 	
 	# Load the environment config

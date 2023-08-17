@@ -14,24 +14,40 @@ from models.Base import AgentBase
 from networks.general import Actor
 from networks.general import SkilledActors
 from utils.env import get_expert
+import datetime
 
 
-class skilledDemoDICE(tf.keras.Model, ABC):
+current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+log_dir = os.path.join('./logging', '0Shot', current_time)
+if not os.path.exists(log_dir):
+	os.makedirs(log_dir, exist_ok=True)
+
+logging.basicConfig(filename=os.path.join(log_dir, 'logs.txt'), filemode='w',
+					format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+					datefmt='%m/%d/%Y %H:%M:%S',
+					level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+logger.info("# ################# Verifying ################# #")
+
+
+
+class zeroShotGODICE(tf.keras.Model, ABC):
 	def __init__(self, args: Namespace):
-		super(skilledDemoDICE, self).__init__()
+		super(zeroShotGODICE, self).__init__()
 		self.args = args
 		
 		self.args.EPS = np.finfo(np.float32).eps  # Small value = 1.192e-07 to avoid division by zero in grad penalty
 		self.args.EPS2 = 1e-3
 		
-		# Define effective state and goal dimensions
+		# Define effective state and goal dimensions [Should be w.r.t one object]
 		self.args.s_eff_dim = 10
 		self.args.c_eff_dim = 3
 		self.args.g_eff_dim = 3
 		
 		# Define Networks
 		self.skilled_actors = SkilledActors(args.a_dim, args.c_dim)
-		# Override the number of actors
+		# Override the number of actors to correspond to the number of effective skills for one object PnP
 		self.skilled_actors.actors = [Actor(self.args.a_dim) for _ in range(self.args.c_eff_dim)]
 		self.skilled_actors.target_actors = [Actor(self.args.a_dim) for _ in range(self.args.c_eff_dim)]
 		
@@ -56,34 +72,15 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 										   tf.float32)
 			curr_skill = tf.expand_dims(curr_skill, axis=0)
 		else:
-			# Get the director corresponding to the previous skill and obtain the current skill
+			# High-Level policy operates on unchanged state-space
 			_, curr_skill, _ = self.skilled_actors.call_director(tf.concat([state, curr_goal], axis=1), prev_skill)
 		
 		# ########################################## Action ######################################### #
-		# Explore
-		if tf.random.uniform(()) < epsilon:
-			action = tf.random.uniform((1, self.args.a_dim), -self.args.action_max, self.args.action_max)
+		# Low Level option policy operates on effective state-space
+		eff_state, eff_curr_goal, eff_curr_skill = self.wrap_state_and_goal(state, curr_goal, curr_skill)
+		action, _, _ = self.skilled_actors.call_actor(tf.concat([eff_state, eff_curr_goal], axis=1), eff_curr_skill)
 		
-		# Exploit
-		else:
-			
-			eff_state, eff_curr_goal, eff_curr_skill = self.wrap_state_and_goal(state, curr_goal, curr_skill)
-			
-			# Get the actor corresponding to the current skill and obtain the action
-			action_mu, _, _ = self.skilled_actors.call_actor(tf.concat([eff_state, eff_curr_goal], axis=1), eff_curr_skill)
-			# Add noise to action
-			action_dev = tf.random.normal(tf.shape(action_mu), mean=0.0, stddev=stddev)
-			action = action_mu + action_dev
-			
-			if self.act_w_expert_action:
-				action = tf.numpy_function(
-					self.expert.sample_action,
-					[state[0], env_goal[0], curr_skill[0], action[0]],
-					tf.float32
-				)
-				action = tf.expand_dims(action, axis=0)
-			
-			action = tf.clip_by_value(action, -self.args.action_max, self.args.action_max)
+		action = tf.clip_by_value(action, -self.args.action_max, self.args.action_max)
 		
 		# Safety check for action, should not be nan or inf
 		has_nan = tf.math.reduce_any(tf.math.is_nan(action))
@@ -151,11 +148,11 @@ class skilledDemoDICE(tf.keras.Model, ABC):
 	
 	def load_(self, one_obj_dir, multi_obj_dir):
 		
-		# Load Directors of multi-object environment
+		# Load high-level policies of multi-object environment
 		for i in range(len(self.skilled_actors.directors)):
 			self.skilled_actors.directors[i].load_weights(multi_obj_dir + "/director_" + str(i) + ".h5")
 		
-		# Load Actors of one-object environment
+		# Load low-level option policies of one-object environment
 		for i in range(len(self.skilled_actors.actors)):
 			self.skilled_actors.actors[i].load_weights(one_obj_dir + "/policy_" + str(i) + ".h5")
 	
@@ -177,29 +174,17 @@ class Agent(AgentBase):
 	def __init__(self, args,
 				 expert_buffer: ReplayBufferTf = None,
 				 offline_buffer: ReplayBufferTf = None):
-		super().__init__(args, skilledDemoDICE(args), 'skilledDemoDICE', expert_buffer, offline_buffer)
+		super().__init__(args, zeroShotGODICE(args), 'skilledDemoDICE', expert_buffer, offline_buffer)
 
 
 def main():
-	tf.config.run_functions_eagerly(True)
+	tf.config.run_functions_eagerly(False)
+	args = get_DICE_args(log_dir, log_dir=log_dir, debug=False)
 	
-	log_dir = os.path.join('./logging', '0Shot')
-	if not os.path.exists(log_dir):
-		os.makedirs(log_dir, exist_ok=True)
-	
-	logging.basicConfig(filename=os.path.join(log_dir, 'logs.txt'), filemode='w',
-						format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
-						datefmt='%m/%d/%Y %H:%M:%S',
-						level=logging.INFO)
-	logger = logging.getLogger(__name__)
-	
-	logger.info("# ################# Verifying ################# #")
-	
-	args = get_DICE_args(log_dir, debug=True)
 	args.algo = 'SkilledDemoDICE'
 	args.log_dir = log_dir
 	args.log_wandb = False
-	args.visualise_test = True
+	args.visualise_test = False
 	
 	logger.info("---------------------------------------------------------------------------------------------")
 	config: dict = vars(args)
@@ -209,32 +194,48 @@ def main():
 	
 	# List Model Directories
 	one_obj_model_dirs = []
-	for root, dirs, files in os.walk('./logging/offlineILPnPOneExp/SkilledDemoDICE_full'):
+	for root, dirs, files in os.walk('./logging/offlineILPnPOneExp/GODICE_semi'):
 		for name in dirs:
 			if 'run' in name:
 				one_obj_model_dirs.append(os.path.join(root, name, 'models'))
 	
-	two_obj_model_dirs = []
-	for root, dirs, files in os.walk('./logging/offlineILPnPTwoExp/SkilledDemoDICE_full_6'):
+	n_obj_model_dirs = []
+	for root, dirs, files in os.walk('./logging/offlineILPnPTwoExp/GODICE_semi(0.25)_6'):
 		for name in dirs:
 			if 'run' in name:
-				two_obj_model_dirs.append(os.path.join(root, name, 'models'))
+				n_obj_model_dirs.append(os.path.join(root, name, 'models'))
 	
 	# Zip the model directories
-	model_dirs = list(zip(one_obj_model_dirs, two_obj_model_dirs))
-	for one_obj_dir, two_obj_dir in model_dirs:
-		logger.info("---------------------------------------------------------------------------------------------")
-		logger.info("One-Obj Model Dir: " + one_obj_dir)
-		logger.info("Two-Obj Model Dir: " + two_obj_dir)
-		agent = Agent(args)
-		agent.model.load_(one_obj_dir, two_obj_dir)
-		
-		agent.visualise(
-			use_expert_skill=True,
-			use_expert_action=False,
-			resume_states=None,
-			num_episodes=1,
-		)
+	multi_model_returns = []
+	agent = Agent(args)
+	for one_obj_dir in one_obj_model_dirs:
+		for n_obj_dir in n_obj_model_dirs:
+			logger.info("---------------------------------------------------------------------------------------------")
+			logger.info("One-Obj Model Dir: " + one_obj_dir)
+			logger.info("{}-Obj Model Dir: ".format(args.num_objs) + n_obj_dir)
+			agent.model.load_(one_obj_dir, n_obj_dir)
+			
+			avg_return, std_dev_return = agent.compute_avg_return(eval_demos=10, avg_of_reward=True)
+			multi_model_returns.append(avg_return)
+			
+			# # If visualise_test is True, then visualise the test episodes
+			# agent.visualise(
+			# 	use_expert_skill=True,
+			# 	use_expert_action=False,
+			# 	resume_states=None,
+			# 	num_episodes=1,
+			# )
+			
+			
+	logger.info("Average Returns across multiple models: {}+={}".format(
+		np.mean(multi_model_returns),
+		np.std(multi_model_returns))
+	)
+	print("Average Returns across multiple models: {} +- {}".format(
+		np.mean(multi_model_returns),
+		np.std(multi_model_returns))
+	)
+	
 		
 
 

@@ -63,6 +63,7 @@ class RolloutWorker:
 		curr_state, curr_ag, curr_g = self.env.forced_reset(resume_state_dict, self.render)
 		return curr_state, curr_ag, curr_g
 	
+	
 	@tf.function
 	def generate_rollout(self, reset=True, resume_state_dict=None, epsilon=0.0, stddev=0.0):
 		# Get the tuple (s_t, s_t+1, g_t, g_t-1, c_t, c_t-1, a_t)

@@ -73,28 +73,29 @@ def repurpose_skill_seq(args, skill_seq):
 	:param skill_seq: one-hot skill sequence of shape (n_trajs, horizon, c_dim)
 	:return: tensor of shape (n_trajs, horizon, c_dim) and type same as skill_seq
 	"""
-	if args.env_name != 'OpenAIPickandPlace':
-		tf.print("Wrapping skill sequence is currently only supported for PnP tasks!")
-		sys.exit(-1)
+	if args.env_name == 'OpenAIPickandPlace':
 	
-	if args.wrap_level == "0":
-		return skill_seq
-	elif args.wrap_level == "1":
-		# wrap by i = j % 3 where i is the new position of skill originally at j. Dim changes from c_dim to 3
-		skill_seq = tf.argmax(skill_seq, axis=-1)
-		skill_seq = skill_seq % 3
-		# Convert back to one-hot
-		skill_seq = tf.one_hot(skill_seq, depth=3)
-		return skill_seq
-	elif args.wrap_level == "2":
-		# wrap such that 0/1/2 -> 0, 3/4/5 -> 1, 6/7/8 -> 2 ... Dim changes from c_dim to self.args.num_objs
-		skill_seq = tf.argmax(skill_seq, axis=-1)
-		skill_seq = skill_seq // 3
-		# Convert back to one-hot
-		skill_seq = tf.one_hot(skill_seq, depth=args.num_objs)
-		return skill_seq
+		if args.wrap_level == "0":
+			return skill_seq
+		elif args.wrap_level == "1":
+			# wrap by i = j % 3 where i is the new position of skill originally at j. Dim changes from c_dim to 3
+			skill_seq = tf.argmax(skill_seq, axis=-1)
+			skill_seq = skill_seq % 3
+			# Convert back to one-hot
+			skill_seq = tf.one_hot(skill_seq, depth=3)
+			return skill_seq
+		elif args.wrap_level == "2":
+			# wrap such that 0/1/2 -> 0, 3/4/5 -> 1, 6/7/8 -> 2 ... Dim changes from c_dim to self.args.num_objs
+			skill_seq = tf.argmax(skill_seq, axis=-1)
+			skill_seq = skill_seq // 3
+			# Convert back to one-hot
+			skill_seq = tf.one_hot(skill_seq, depth=args.num_objs)
+			return skill_seq
+		else:
+			raise NotImplementedError("Invalid value for wrap_skill_id: {}".format(args.wrap_level))
+	
 	else:
-		raise NotImplementedError("Invalid value for wrap_skill_id: {}".format(args.wrap_level))
+		return skill_seq
 	
 	
 def convert_tf_to_numpy(x):
