@@ -17,7 +17,7 @@ def run_verify(args, model_dir):
 	
 	# ############################################# TESTING #################################################### #
 	print("\n------------- Verifying SkilledActor at {} -------------".format(model_dir))
-	from models.skilledDemoDICE import Agent as Agent_skilledDemoDICE
+	from models.GODICE import Agent as Agent_skilledDemoDICE
 	agent = Agent_skilledDemoDICE(args)
 	
 	logger.info("Loading Model Weights from {}".format(model_dir))

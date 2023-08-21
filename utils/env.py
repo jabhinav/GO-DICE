@@ -15,7 +15,7 @@ def save_env_img(env: MyPnPEnvWrapper, path_to_save="./env_curr_state.png"):
     im.save(path_to_save)
 
 
-def get_config_env(args, ag_in_env_goal):
+def add_env_config(args, ag_in_env_goal):
     """
     :param args: Namespace object
     :param ag_in_env_goal: If True, then achieved goal is in the same space as env goal
@@ -54,3 +54,18 @@ def get_expert(num_objects: int, args):
     else:
         raise NotImplementedError
     return expert
+
+
+def get_horizon(num_objects: int, stack: bool):
+    if num_objects == 1:
+        horizon = 100
+    elif num_objects == 2:
+        horizon = 150
+    elif num_objects == 3:
+        if stack:
+            horizon = 200
+        else:
+            horizon = 250
+    else:
+        raise NotImplementedError
+    return horizon

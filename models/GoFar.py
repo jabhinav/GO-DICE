@@ -232,8 +232,8 @@ class GoFar(tf.keras.Model, ABC):
 
 class Agent(AgentBase):
 	def __init__(self, args,
-				 expert_buffer: ReplayBufferTf,
-				 offline_buffer: ReplayBufferTf):
+				 expert_buffer: ReplayBufferTf = None,
+				 offline_buffer: ReplayBufferTf = None):
 		
 		super().__init__(args, GoFar(args), 'GoFar', expert_buffer, offline_buffer)
 	

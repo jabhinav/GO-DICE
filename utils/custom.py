@@ -1,11 +1,7 @@
 import logging
-import random
-from typing import Optional, List
+import sys
 
-import numpy as np
 import tensorflow as tf
-
-from her.rollout import RolloutWorker
 
 logger = logging.getLogger(__name__)
 
@@ -45,117 +41,6 @@ def get_some_tensor(x, y):
     op0 = tf.reduce_sum(tf.multiply(op0, y), axis=0)  # curr_dim,
 
 
-def evaluate(actor, env, num_episodes=100):
-    """Evaluates the policy.
-
-    Args:
-      actor: A policy to evaluate.
-      env: Environment to evaluate the policy on.
-      num_episodes: A number of episodes to average the policy on.
-
-    Returns:
-      Averaged reward and a total number of steps.
-    """
-    total_timesteps = 0
-    total_returns = 0
-
-    for _ in range(num_episodes):
-        state = env.reset()
-        done = False
-        while not done:
-            action, _, _ = actor(np.array([state]))
-            action = action[0].numpy()
-
-            next_state, reward, done, _ = env.step(action)
-
-            total_returns += reward
-            total_timesteps += 1
-            state = next_state
-
-    return total_returns / num_episodes, total_timesteps / num_episodes
-
-
-def evaluate_worker(
-        worker: RolloutWorker,
-        num_episodes,
-        log_traj: bool = False,
-        resume_states: Optional[List[dict]] = None
-):
-    """Evaluates the policy.
-
-        Args:
-          worker: Rollout worker.
-          num_episodes: A number of episodes to average the policy on.
-          log_traj: Whether to log the skills or not (default: False).
-          resume_states: List of Resume states (default: None).
-        Returns:
-          Averaged reward and a total number of steps.
-        """
-
-    total_timesteps = []
-    total_returns = []
-    avg_final_goal_dist = []
-    avg_perc_decrease = []
-
-    i = 0
-    exception_count = 0
-    while i < num_episodes:
-
-        if resume_states is None:
-            # logger.info("No resume init state provided. Randomly initializing the env.")
-            resume_state_dict = None
-        else:
-            logger.info(f"Resume init state provided! Check if you intended to do so.")
-            # sample a random state from the list of resume states
-            resume_state_dict = random.choice(resume_states)
-
-        try:
-            episode, stats = worker.generate_rollout(resume_state_dict=resume_state_dict)
-        except Exception as e:
-            exception_count += 1
-            logger.info(f"Exception occurred: {e}")
-            if exception_count < 10:
-                continue
-            else:
-                raise e
-
-        success = stats['ep_success'].numpy() if isinstance(stats['ep_success'], tf.Tensor) else stats['ep_success']
-        length = stats['ep_length'].numpy() if isinstance(stats['ep_length'], tf.Tensor) else stats['ep_length']
-        init_goal_dist = episode['distances'][0][0]
-        final_goal_dist = episode['distances'][0][-1]
-        init_goal_dist = init_goal_dist.numpy() if isinstance(init_goal_dist, tf.Tensor) else init_goal_dist
-        final_goal_dist = final_goal_dist.numpy() if isinstance(final_goal_dist, tf.Tensor) else final_goal_dist
-
-        perc_decrease = (init_goal_dist - final_goal_dist) / init_goal_dist
-
-        total_returns.append(success)
-        total_timesteps.append(length)
-        avg_final_goal_dist.append(final_goal_dist)
-        avg_perc_decrease.append(perc_decrease)
-
-        if log_traj:
-            prev_skills = episode['prev_skills'].numpy() \
-                if isinstance(episode['prev_skills'], tf.Tensor) else episode['prev_skills']
-            prev_skills = np.argmax(prev_skills[0], axis=1).tolist()
-            prev_skills = [skill for skill in prev_skills]
-
-            curr_skills = episode['curr_skills'].numpy() \
-                if isinstance(episode['curr_skills'], tf.Tensor) else episode['curr_skills']
-            curr_skills = np.argmax(curr_skills[0], axis=1).tolist()
-            curr_skills = [skill for skill in curr_skills]
-
-            actions = episode['actions'].numpy() if isinstance(episode['actions'], tf.Tensor) else episode['actions']
-            actions = actions[0]
-            logger.info(f"\nEpisode Num: {i}")
-            # Log the trajectory in the form <time_step, prev_skill, curr_skill, action>
-            for t in range(len(prev_skills)):
-                logger.info(f"<{t}: {prev_skills[t]} -> {curr_skills[t]} -> {actions[t]}>")
-
-        i += 1
-
-    return np.mean(total_returns), np.mean(total_timesteps), np.mean(avg_final_goal_dist), np.mean(avg_perc_decrease)
-
-
 def debug(fn_name, do_debug=False):
     if do_debug:
         print("Tracing", fn_name)
@@ -185,3 +70,36 @@ def turn_off_GPU():
     visible_devices = tf.config.get_visible_devices()
     for device in visible_devices:
         assert device.device_type != 'GPU'
+
+
+def repurpose_skill_seq(args, skill_seq):
+    """
+    Repurpose the skill sequence to be used for training the policy. Use value of wrap_skill_id
+    = "0": no change
+    = "1": wrap pick/grab/drop:obj_id to pick/grab/drop
+    = "2": wrap pick:obj_id to pick/grab/drop:obj_id to obj_id
+    :param skill_seq: one-hot skill sequence of shape (n_trajs, horizon, c_dim)
+    :return: tensor of shape (n_trajs, horizon, c_dim) and type same as skill_seq
+    """
+    if args.env_name != 'OpenAIPickandPlace':
+        tf.print("Wrapping skill sequence is currently only supported for PnP tasks!")
+        sys.exit(-1)
+
+    if args.wrap_level == "0":
+        return skill_seq
+    elif args.wrap_level == "1":
+        # wrap by i = j % 3 where i is the new position of skill originally at j. Dim changes from c_dim to 3
+        skill_seq = tf.argmax(skill_seq, axis=-1)
+        skill_seq = skill_seq % 3
+        # Convert back to one-hot
+        skill_seq = tf.one_hot(skill_seq, depth=3)
+        return skill_seq
+    elif args.wrap_level == "2":
+        # wrap such that 0/1/2 -> 0, 3/4/5 -> 1, 6/7/8 -> 2 ... Dim changes from c_dim to self.args.num_objs
+        skill_seq = tf.argmax(skill_seq, axis=-1)
+        skill_seq = skill_seq // 3
+        # Convert back to one-hot
+        skill_seq = tf.one_hot(skill_seq, depth=args.num_objs)
+        return skill_seq
+    else:
+        raise NotImplementedError("Invalid value for wrap_skill_id: {}".format(args.wrap_level))

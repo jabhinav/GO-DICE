@@ -1,6 +1,6 @@
 import argparse
 import os
-from utils.env import get_config_env
+from utils.env import add_env_config
 
 
 def get_goalGuidedOptionBC_args(log_dir):
@@ -76,7 +76,7 @@ def get_goalGuidedOptionBC_args(log_dir):
 	args = parser.parse_args()
 	
 	# Load the environment config
-	args = get_config_env(args)
+	args = add_env_config(args)
 	
 	# Other Configurations
 	args.train_demos = int(args.expert_demos * args.perc_train)
