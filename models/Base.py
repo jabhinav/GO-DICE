@@ -19,6 +19,7 @@ from domains.PointMassDropNReach import MyPointMassDropNReachEnvWrapper
 from collections import Counter
 from utils.env import save_env_img
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,26 +55,28 @@ class AgentBase(object):
 		if args.env_name == 'OpenAIPickandPlace':
 			self.env: MyPnPEnvWrapper = get_PnP_env(args)
 			self.eval_env: MyPnPEnvWrapper = get_PnP_env(args)
+			self.visualise_env: MyPnPEnvWrapper = get_PnP_env(args)
 		elif args.env_name == 'MyPointMassDropNReach':
 			self.env: MyPointMassDropNReachEnvWrapper = get_PointMass_env(args)
 			self.eval_env: MyPointMassDropNReachEnvWrapper = get_PointMass_env(args)
+			self.visualise_env: MyPointMassDropNReachEnvWrapper = get_PointMass_env(args)
 		else:
 			raise NotImplementedError('Env %s not implemented' % args.env_name)
 		
 		# Define the Rollout Workers
-		# Worker 1: For offline data collection
+		# Worker 1: For offline data collection, rollout_terminate=False for making sure every episode is of length T
 		self.policy_worker = RolloutWorker(
 			self.env, self.model, T=args.horizon, rollout_terminate=False, render=False,
 			is_expert_worker=False
 		)
-		# Worker 2: For evaluation
+		# Worker 2: For evaluation, rollout_terminate=True for making sure episode terminates when goal is reached
 		self.eval_worker = RolloutWorker(
 			self.eval_env, self.model, T=args.horizon, rollout_terminate=True, render=False,
 			is_expert_worker=False
 		)
 		# Worker 3: For visualisation
 		self.visualise_worker = RolloutWorker(
-			self.eval_env, self.model, T=args.horizon, rollout_terminate=False, render=args.visualise_test,
+			self.visualise_env, self.model, T=args.horizon, rollout_terminate=False, render=self.args.visualise_test,
 			is_expert_worker=False
 		)
 		
@@ -313,7 +316,7 @@ class AgentBase(object):
 				  use_expert_action=False,
 				  resume_states: Optional[List[dict]] = None,
 				  num_episodes=None):
-		logger.info("Visualising the policy with expert Options: {}".format(use_expert_options))
+		logger.info("Visualising the policy with expert options: {}".format(use_expert_options))
 		logger.info("Visualising the policy with expert action: {}".format(use_expert_action))
 		
 		tf.config.run_functions_eagerly(True)
@@ -326,7 +329,7 @@ class AgentBase(object):
 		i = 0
 		exception_count = 0
 		pbar = tqdm(total=num_episodes, position=0, leave=True, desc="Visualising ")
-		while i < self.args.test_demos:
+		while i < num_episodes:
 			if resume_states is None:
 				# logger.info("No resume init state provided. Randomly initializing the env.")
 				resume_state_dict = None
@@ -336,7 +339,7 @@ class AgentBase(object):
 				resume_state_dict = random.choice(resume_states)
 			
 			try:
-				episode, stats = self.visualise_worker.generate_rollout(resume_state_dict=resume_state_dict)
+				_, _ = self.visualise_worker.generate_rollout(resume_state_dict=resume_state_dict)
 			except Exception as e:
 				exception_count += 1
 				logger.info(f"Exception occurred: {e}")
@@ -348,6 +351,42 @@ class AgentBase(object):
 			# Save the last state of the episode as image
 			save_env_img(self.visualise_worker.env, path_to_save=os.path.join(self.args.log_dir,
 																			  f"episode_{i}_last_state.png"))
+			
+			i += 1
+			pbar.update(1)
+		
+		pbar.close()
+	
+	def record(self,
+				  use_expert_options=False,
+				  use_expert_action=False,
+				  num_episodes=None):
+		logger.info("Visualising the policy with expert options: {}".format(use_expert_options))
+		logger.info("Visualising the policy with expert action: {}".format(use_expert_action))
+		
+		self.model.change_training_mode(training_mode=False)
+		
+		self.model.act_w_expert_skill = use_expert_options
+		self.model.act_w_expert_action = use_expert_action
+		
+		i = 0
+		exception_count = 0
+		pbar = tqdm(total=num_episodes, position=0, leave=True, desc="Recording ")
+		while i < num_episodes:
+			
+			dir_record = os.path.join(self.args.log_dir, f"episode_{i}")
+			if not os.path.exists(dir_record):
+				os.makedirs(dir_record)
+				
+			try:
+				self.visualise_worker.record_rollout(save_at=dir_record)
+			except Exception as e:
+				exception_count += 1
+				logger.info(f"Exception occurred: {e}")
+				if exception_count < 10:
+					continue
+				else:
+					raise e
 			
 			i += 1
 			pbar.update(1)
@@ -392,7 +431,7 @@ class AgentBase(object):
 		
 		while i < eval_demos:
 			try:
-				episode, stats = self.visualise_worker.generate_rollout(resume_state_dict=None)
+				episode, stats = self.eval_worker.generate_rollout(resume_state_dict=None)
 			except Exception as e:
 				exception_count += 1
 				logger.info(f"Exception occurred: {e}")
@@ -452,7 +491,7 @@ class AgentBase(object):
 			
 			plt.xlabel("Time")
 			plt.ylabel("Option Number")
-			plt.title(f"Options Activation")
+			# plt.title(f"Options Activation")
 			plt.legend()
 			plt.savefig(os.path.join(ep_dir_plot, f"options_activation.pdf"))
 			plt.close()

@@ -1,8 +1,9 @@
 import logging
 import sys
+import os
 from collections import deque
 
-import numpy as np
+from utils.env import save_env_img
 import tensorflow as tf
 from mujoco_py import MujocoException
 
@@ -215,3 +216,51 @@ class RolloutWorker:
 	
 	def current_mean_Q(self):
 		return tf.add_n(self.Q_history) / tf.cast(len(self.Q_history), dtype=tf.float32)
+	
+	def record_rollout(self, save_at, epsilon=0.0, stddev=0.0):
+
+		curr_state, _, g_env = self.reset_rollout()  # Get s_0 and g_env
+		
+		# For Expert, reset its policy to reset its internal state
+		if self.is_expert_worker:
+			self.policy.reset(curr_state, g_env)
+		else:
+			if hasattr(self.policy, 'expert'):
+				tf.numpy_function(func=self.policy.expert.reset, inp=[curr_state, g_env], Tout=[])
+			else:
+				logger.info("Expert guide not found for the model policy!")
+		
+		curr_goal = self.policy.get_init_goal(curr_state, g_env)  # g_0 = g_env
+		# # InitSkill: Ask the actor to predict the init skill. If expert, must be called after reset
+		curr_skill = self.policy.get_init_skill()
+		
+		for t in tf.range(self.horizon):
+			# # Sleep to slow down the simulation
+			# time.sleep(0.1)
+			
+			# Save the environment image
+			save_env_img(self.env, path_to_save=os.path.join(save_at, f'{t}.png'))
+			
+			# # Reshape the tensors
+			curr_state = tf.reshape(curr_state, shape=(1, -1))
+			g_env = tf.reshape(g_env, shape=(1, -1))
+			curr_goal = tf.reshape(curr_goal, shape=(1, -1))
+			curr_skill = tf.reshape(curr_skill, shape=(1, -1))
+
+			# # Act using the policy -> Get g_t, c_t, a_t
+			curr_goal, curr_skill, action = self.policy.act(state=curr_state, env_goal=g_env,
+															prev_goal=curr_goal, prev_skill=curr_skill,
+															epsilon=epsilon, stddev=stddev)
+			
+			try:
+				# # Transition to the next state: s_{t+1}
+				curr_state, _, g_env, done, distance = tf.numpy_function(func=self.env.step,
+																		 inp=[action, self.render],
+																		 Tout=[tf.float32, tf.float32,
+																			   tf.float32, tf.int32, tf.float32])
+				
+				if self.rollout_terminate and tf.cast(done, tf.bool):
+					break
+			
+			except MujocoException:
+				self.generate_rollout(reset=True)

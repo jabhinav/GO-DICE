@@ -31,7 +31,7 @@ get_config = {
 	# 'ValueDICE': get_DICE_args,
 	'DemoDICE': get_DICE_args,
 	'GoFar': get_DICE_args,
-	'SkilledDemoDICE': get_DICE_args,
+	'GODICE': get_DICE_args,
 	'Expert': get_DICE_args,
 }
 
@@ -41,9 +41,80 @@ Agents = {
 	# 'ValueDICE': run_valueDICE,
 	'DemoDICE': Agent_demoDICE,
 	'GoFar': Agent_GoFar,
-	'SkilledDemoDICE': Agent_GODICE,
+	'GODICE': Agent_GODICE,
 	'Expert': Agent_Expert,
 }
+
+
+def record(algo: str, root_dir):
+	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+	
+	# Set the random seeds randomly for more randomness
+	np.random.seed(int(time.time()))
+	tf.random.set_seed(int(time.time()))
+	
+	tf.config.run_functions_eagerly(True)
+	
+	dir_root_log = os.path.join('./logging', 'record' + current_time)
+	if not os.path.exists(dir_root_log):
+		os.makedirs(dir_root_log, exist_ok=True)
+	
+	logging.basicConfig(filename=os.path.join(dir_root_log, 'logs.txt'), filemode='w',
+						format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+						datefmt='%m/%d/%Y %H:%M:%S',
+						level=logging.INFO)
+	logger = logging.getLogger(__name__)
+	
+	logger.info("# ################# Recording ################# #")
+	
+	args = get_config[algo](algo, dir_root_log, debug=True, forced_config=None)
+	args.algo = algo
+	args.log_wandb = False
+	args.visualise_test = False
+	
+	logger.info("---------------------------------------------------------------------------------------------")
+	config: dict = vars(args)
+	config = {key: str(value) for key, value in config.items()}
+	config = OrderedDict(sorted(config.items()))
+	logger.info(json.dumps(config, indent=4))
+	
+	# List Model Directories
+	model_dirs = []
+	for root, dirs, files in os.walk(root_dir):
+		for name in dirs:
+			if 'run' in name:
+				model_dirs.append(os.path.join(root, name, 'models'))
+	
+	for model_dir in model_dirs:
+		
+		print("Recording Demos by Model: {}".format(model_dir))
+		
+		# Create log directory within args.log_dir
+		model_log_dir = os.path.join(dir_root_log, os.path.basename(os.path.dirname(model_dir)))
+		if not os.path.exists(model_log_dir):
+			os.makedirs(model_log_dir, exist_ok=True)
+		
+		args.log_dir = model_log_dir
+		
+		# ############################################# Verifying ################################################## #
+		agent = Agents[algo](args)
+		logger.info("Loading Model Weights from {}".format(model_dir))
+		agent.load_model(dir_param=model_dir)
+		
+		# resume_files = os.listdir('./pnp_data/two_obj_0_1_train_env_states')
+		# resume_files = [f for f in resume_files if f.endswith('.pkl')]
+		# resume_states = []
+		# for f in resume_files:
+		# 	with open(os.path.join('./pnp_data/two_obj_0_1_train_env_states', f), 'rb') as file:
+		# 		resume_states.append(pickle.load(file))
+		
+		agent.record(
+			use_expert_options=False,
+			use_expert_action=False,
+			num_episodes=2,
+		)
+		
+		break
 
 
 def verify(algo: str):
@@ -119,7 +190,7 @@ def verify(algo: str):
 		)
 
 
-def evaluate(algo: str, num_eval_demos=100):
+def evaluate(algo: str, num_eval_demos=100, eval_with_expert_assist: bool = False):
 	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 	
 	# Set the random seeds randomly for more randomness
@@ -158,7 +229,7 @@ def evaluate(algo: str, num_eval_demos=100):
 	
 	# List Model Directories
 	model_dirs = []
-	for root, dirs, files in os.walk('./logging/offlineILPnPTwoExp/GODICE_semi(0.25)_6'):
+	for root, dirs, files in os.walk('./logging/offlineILPnPTwoExp/GODICE_none(0.25)_6'):
 		for name in dirs:
 			if 'run' in name:
 				model_dirs.append(os.path.join(root, name, 'models'))
@@ -169,8 +240,9 @@ def evaluate(algo: str, num_eval_demos=100):
 	# # tasks uses the same logic of Pick-Grab-Drop across multiple objects. So we can get by using the n-object Agent
 	# # with expert assist. For any other implementation, would need to use zero_shot script which targets at one-obj
 	# # low level policy reuse in higher order tasks
-	agent.model.act_w_expert_action = True
-	logger.info("IMP: Evaluating Expert's Low Level Policy with Learned Option Transitions")
+	if eval_with_expert_assist:
+		agent.model.act_w_expert_action = True
+		logger.info("IMP: Evaluating Expert's Low Level Policy with Learned Option Transitions")
 	
 	multi_model_returns = []
 	for model_dir in model_dirs:
@@ -331,7 +403,7 @@ if __name__ == "__main__":
 	# _forced_configs = get_multiple_configs()
 	# for _config in _forced_configs:
 	# 	print("Running with Config: {}".format(_config))
-	# 	num_runs = 5
+	# 	num_runs = 3
 	# 	for i in range(num_runs):
 	# 		run(debug=False, algo=_config['algo'], forced_config=_config)
 	
@@ -339,6 +411,8 @@ if __name__ == "__main__":
 	# for i in range(num_runs):
 	# 	run(debug=False, algo='SkilledDemoDICE')
 	
-	evaluate(algo='SkilledDemoDICE')
+	# evaluate(algo='SkilledDemoDICE')
 	# verify(algo='SkilledDemoDICE')
+	
+	record(algo='DemoDICE', root_dir='./logging/offlineILPnPTwoExp/DemoDICE')
 

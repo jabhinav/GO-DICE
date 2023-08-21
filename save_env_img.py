@@ -2,8 +2,8 @@ from domains.PnP import MyPnPEnvWrapper
 from utils.env import save_env_img
 import time
 
-exp_env = MyPnPEnvWrapper(full_space_as_goal=False, num_objs=1,
-						  stacking=False, fix_goal=False, fix_object=False)
+exp_env = MyPnPEnvWrapper(full_space_as_goal=False, num_objs=3,
+						  stacking=True, fix_goal=False, fix_object=False)
 
 old_obs = exp_env._env.reset()
 
@@ -13,7 +13,7 @@ for n in range(1):
 	obs, reward, done, info = exp_env._env.step(action)
 	time.sleep(0.1)
 	
-save_env_img(exp_env, path_to_save='./PnPx1.png')
+save_env_img(exp_env, path_to_save='./PnPx3Stack.png')
 # old_state = exp_env._env.sim.get_state()
 # old_goal = exp_env._env._current_goal
 #

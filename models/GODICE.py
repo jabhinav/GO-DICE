@@ -457,7 +457,7 @@ class Agent(AgentBase):
 				 expert_buffer: ReplayBufferTf = None,
 				 offline_buffer: ReplayBufferTf = None):
 		
-		super().__init__(args, GODICE(args), 'skilledDemoDICE', expert_buffer, offline_buffer)
+		super().__init__(args, GODICE(args), 'GODICE', expert_buffer, offline_buffer)
 	
 	def load_actor(self, dir_param):
 		self.model.skilled_actors.load_weights(dir_param + "/policy.h5")

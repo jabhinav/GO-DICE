@@ -10,17 +10,18 @@ def get_DICE_args(algo: str, log_dir: str, debug: bool = False, forced_config: d
 	# Force Environment Configuration
 	env_name = 'OpenAIPickandPlace'
 	num_objs = 2
-	stacking: bool = True
+	stacking: bool = False
 	horizon = get_horizon(num_objs, stack=stacking)
 	
-	parser.add_argument('--algo', type=str, default=algo, choices=['BC', 'GoFar', 'DemoDICE', 'SkilledDemoDICE',
+	parser.add_argument('--algo', type=str, default=algo, choices=['BC', 'GoFar', 'DemoDICE', 'GODICE',
 																   'Expert'])
 	parser.add_argument('--log_wandb', type=bool, default=not debug)
 	# parser.add_argument('--log_wandb', type=bool, default=False)
-	parser.add_argument('--wandb_project', type=str, default='MyPointMassDropNReach',
-						choices=['GODICE_offlineILPnPOne',
-								 'GODICE_offlineILPnPOne0.10',
-								 'GODICE_offlineILPnPOneExp',
+	parser.add_argument('--wandb_project', type=str, default='GODICE_offlineILPnPOne0.05',
+						choices=['GODICE_offlineILPnPOne',  # 25 Expert, 75 Imperfect
+								 'GODICE_offlineILPnPOne0.05',  # 5 Exp, 95 Imperfect
+								 'GODICE_offlineILPnPOne0.10',  # 10 Exp, 90 Imperfect
+								 'GODICE_offlineILPnPOneExp',  # 25 Expert, 75 Expert
 								 'GODICE_offlineILPnPTwoExp',
 								 'GODICE_offlineILPnPDEBUG',
 								 'GODICE_offlineILPnPDEBUGExp',
@@ -47,8 +48,8 @@ def get_DICE_args(algo: str, log_dir: str, debug: bool = False, forced_config: d
 	# 					help='Number of time steps after which latent skills will be updated using Viterbi [Unused]')
 	
 	# Specify Data Collection Configuration
-	parser.add_argument('--expert_demos', type=int, default=50)
-	parser.add_argument('--offline_demos', type=int, default=50)
+	parser.add_argument('--expert_demos', type=int, default=5)
+	parser.add_argument('--offline_demos', type=int, default=95)
 	parser.add_argument('--perc_train', type=float, default=1.0)
 	parser.add_argument('--buffer_size', type=int, default=int(2e5),
 						help='Number of transitions to store in buffer (max_time_steps)')
@@ -70,22 +71,22 @@ def get_DICE_args(algo: str, log_dir: str, debug: bool = False, forced_config: d
 	# Specify Training configuration
 	parser.add_argument('--max_pretrain_time_steps', type=int, default=0 if not debug else 0,
 						help='No. of time steps to run pretraining - actor, director on expert data. Set to 0 to skip')
-	parser.add_argument('--max_time_steps', type=int, default=10000 if not debug else 100,
+	parser.add_argument('--max_time_steps', type=int, default=20000 if not debug else 100,
 						help='No. of time steps to run. Recommended 5k for one_obj, 10k for two_obj')
-	parser.add_argument('--batch_size', type=int, default=3 * num_objs * 256,
+	parser.add_argument('--batch_size', type=int, default=256,
 						help='No. of trans to sample from buffer for each update')
 	parser.add_argument('--trans_style', type=str, default='random_unsegmented',
 						choices=['random_unsegmented', 'random_segmented'],
 						help='How to sample transitions from expert buffer')
 	
 	# Polyak
-	parser.add_argument('--update_target_interval', type=int, default=20,
+	parser.add_argument('--update_target_interval', type=int, default=50,
 						help='Number of time steps after which target networks will be updated using polyak averaging')
-	parser.add_argument('--actor_polyak', type=float, default=0.95,
+	parser.add_argument('--actor_polyak', type=float, default=0.50,
 						help='Polyak averaging coefficient for actor.')
-	parser.add_argument('--director_polyak', type=float, default=0.95,
+	parser.add_argument('--director_polyak', type=float, default=0.50,
 						help='Polyak averaging coefficient for director.')
-	parser.add_argument('--critic_polyak', type=float, default=0.95,
+	parser.add_argument('--critic_polyak', type=float, default=0.50,
 						help='Polyak averaging coefficient for critic.')
 	
 	# Evaluation
@@ -96,7 +97,7 @@ def get_DICE_args(algo: str, log_dir: str, debug: bool = False, forced_config: d
 	parser.add_argument('--subgoal_reward', type=int, default=1, help='Reward for achieving subgoals')
 	
 	# # DICE Parameters
-	parser.add_argument('--replay_regularization', type=float, default=0.01,
+	parser.add_argument('--replay_regularization', type=float, default=0.05,
 						help='Replay Regularization Coefficient. Used by both ValueDICE (0.1) and DemoDICE (0.05)')
 	parser.add_argument('--discount', type=float, default=0.99, help='Discount used for returns.')
 	parser.add_argument('--nu_grad_penalty_coeff', type=float, default=1e-4,
