@@ -186,7 +186,6 @@ class Actor(tf.keras.Model):
         
         return log_probs
     
-    
     def call(self, states, training=None, mask=None):
         """Computes actions for given inputs.
         Args:
@@ -419,57 +418,71 @@ class SkilledActors(tf.keras.Model):
     
         return next_skill_probs, next_skills, next_skill_log_probs
 
-    
     def compute_max_path_viterbi(self, log_probs, init_skill):
         """
         Computes the Viterbi path. Use numpy
+        # Decode c_{0} to c_{t = T-1} (total T steps) given the log probabilities and c_{-1} = init_skill
         """
         num_decoding_steps = log_probs.shape[0]
         init_skill = np.reshape(init_skill, (1, -1))  # 1 x (prev)skill_dim
-        
-        # Initialise the forward messages (gather t=0 corresponding to prev_skill=init_skill)
+
+        # # Initialise the forward messages (gather t=0 corresponding to prev_skill=init_skill)
         mu = log_probs[0]  # (prev)skill_dim x (curr)skill_dim
         # Collect the current skill distribution based on prev_skill = init_skill
         mu = np.matmul(init_skill, mu)  # 1 x (curr)skill_dim
-        
+
+        # Store the most-likely previous skill for each current skill at every time step, (curr)skill_dim at each step
+        # Will store possibilities for c_{-1}, c_{0}, ..., c_{T-2} (total T steps)
         mu_path = np.zeros((num_decoding_steps, self.skill_dim), dtype=np.float32)
-        # Assign the vectorised initial skill to the max path at t=0
+        # Initialise mu_path: For each curr skill at t=0, the most likely prev skill is the init_skill
         mu_path[0] = np.argmax(init_skill)
-        
-        # Decode  c_{0} to c_{t = T-1} (total T steps)
+
+        # # Forward pass to get the forward messages:
+        # # mu_t = max_{c_{t-1}} (mu_{t-1} * P(c_{t} | c_{t-1}, s_{t}) * P(a_{t} | c_{t}, s_{t}))
+        # # We will use log-probs, thus what we are adding is not 'mu' but 'log(mu)'
         for t in range(1, num_decoding_steps):
-            # Add mu(it's now corresponding to prev_skill) to the log probs to get the next forward message
+            # Step 1: Compute the accumulate log probabilities i.e. prob of each next skill given all prev skills
             accumulate_log_prob_t = np.reshape(mu, (-1, 1)) + log_probs[t]  # (prev)skill_dim x (curr)skill_dim
+            # Step 2: Take the arg-max/max over prev skills to get the most likely prev skill for each curr skill
             mu_path[t] = np.argmax(accumulate_log_prob_t, axis=-2)  # (curr)skill_dim
             mu = np.max(accumulate_log_prob_t, axis=-2)  # (curr)skill_dim
-        
-        # Backward pass to get the Viterbi path
+
+        # Backward pass to get the Viterbi path c_{T-1}, c_{T-2}, ..., c_{0}, c_{-1} (total T + 1 steps)
         path = np.zeros((num_decoding_steps + 1, 1), dtype=np.int32)
-        path[-1] = np.argmax(mu)
-        log_prob_traj = np.max(mu)
+        path[-1] = np.argmax(mu)  # Get the most likely skill at t=T-1: Initialise max path
+        log_prob_traj = np.max(mu)  # The log probability of the max path
+
+        # We back-track most likely prev skill for the given curr skill along max path
         for t in range(num_decoding_steps, 0, -1):
-            path[t-1] = mu_path[t - 1, path[t]]  # Here we are using the max path to get the previous skill
-            
+            path[t - 1] = mu_path[t - 1, path[t]]
+
         return path, log_prob_traj
-    
-    def viterbi_decode(self, states, actions, init_skill, use_ref=False):
+
+    def viterbi_decode(self, states, actions, init_skill, use_ref):
         """
         Computes the Viterbi path for the given
         > states (T x s_dim),
         > actions (T x a_dim)
         > init_skill (skill_dim,) one-hot vector
         """
-        
+
         log_pis = self.get_actor_log_probs(states, None, actions, use_ref)  # T x (curr)skill_dim x 1
         log_pis = tf.reshape(log_pis, (states.shape[0], 1, self.skill_dim))  # T x 1 x (curr)skill_dim
         log_trs = self.get_director_log_probs(states, None, None, use_ref)  # T x (prev)skill_dim x (curr)skill_dim
         log_probs = log_pis + log_trs  # T x (prev)skill_dim x (curr)skill_dim
-        
+
         path, log_prob_traj = tf.numpy_function(self.compute_max_path_viterbi,
                                                 [log_probs, init_skill],
                                                 [tf.int32, tf.float32])
-        
-        return path, log_prob_traj
+
+        # Get the probability of each transition in the max path of shape (T + 1) x 1
+        # How? For t = 1 to T take the log probability of the transition from path_{t-1} to path_{t}
+        ind = tf.stack([tf.reshape(tf.range(log_trs.shape[0]), (-1, 1)), path[:-1], path[1:]], axis=-1)
+        ind = tf.squeeze(ind, axis=1)
+        transition_log_probs = tf.gather_nd(log_trs, ind)  # T
+        transition_probs = tf.exp(transition_log_probs)  # T
+
+        return path, log_prob_traj, transition_probs
 
 
 class preTanhActor(tf.keras.Model):

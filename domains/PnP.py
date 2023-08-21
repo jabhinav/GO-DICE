@@ -1,6 +1,6 @@
 import collections
 import logging
-from typing import Tuple
+from typing import Tuple, Dict
 
 import numpy as np
 
@@ -21,12 +21,7 @@ class MyPnPEnvWrapper(object):
     def __init__(self, full_space_as_goal=False, goal_weight=1., distance_threshold=0.05, feasible_hand=True,
                  num_objs=1, first_in_place=False, stacking=False, fix_goal=False,
                  fix_object=False):
-        """
-        GoalGAIL compatible Wrapper for PnP Env
-        Args:
-            full_space_as_goal:
-            **kwargs:
-        """
+
         if num_objs == 1:
             from .Fetch_Base.fetch_env_oneobj import FetchPickAndPlaceEnv
             env = FetchPickAndPlaceEnv(distance_threshold=distance_threshold, fix_object=fix_object, fix_goal=fix_goal)
@@ -58,6 +53,11 @@ class MyPnPEnvWrapper(object):
         # Effective latent dimension: Corresponding to pick, grab and drop
         self.latent_dim = 3
 
+        # Subgoal Achieved Indicator
+        self.pick_sub_goals_achieved: Dict[int, bool] = {}
+        self.place_sub_goals_achieved: Dict[int, bool] = {}
+        self.place_sub_goals_distances: Dict[int, float] = {}
+
     @property
     def observation_space(self):
         return self._observation_space
@@ -81,15 +81,20 @@ class MyPnPEnvWrapper(object):
         while done:
             d, _ = self._env.reset()
             done = np.linalg.norm(d['achieved_goal'] - d['desired_goal']) < self.distance_threshold
+
         # Update the goal based on some checks
         self.update_goal(d=d)
+
+        # Reset subgoal achieved indicator
+        self.reset_subgoals_achieved_indicators()
+
         obs = self._transform_obs(d['observation'])
+        achieved_goal = self.transform_to_goal_space(obs)
+        desired_goal = self.current_goal
 
         if render:
             self.render()
 
-        achieved_goal = self.transform_to_goal_space(obs)
-        desired_goal = self.current_goal
         return obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32)
 
     def forced_reset(self, state_dict, render=False):
@@ -112,21 +117,31 @@ class MyPnPEnvWrapper(object):
 
         obs, reward, terminated, truncated, info = self._env.step(action)
         next_obs = self._transform_obs(obs['observation'])  # Remove unwanted portions of the observed state
+
+        # Populate info
         info['obs2goal'] = self.transform_to_goal_space(next_obs)
         info['distance'] = np.linalg.norm(self.current_goal - info['obs2goal'])
+        info['goal_reached'] = info['distance'] < self.distance_threshold
         if self.full_space_as_goal:
             info['block_distance'] = np.linalg.norm((self.current_goal - info['obs2goal'])[3:6])
             info['hand_distance'] = np.linalg.norm((self.current_goal - info['obs2goal'])[0:3])
-        info['goal_reached'] = info['distance'] < self.distance_threshold
+
+        # Check for subgoal achievement
+        self.check_for_subgoals(next_obs)
+        info.update({
+            'subgoals/pick': self.pick_sub_goals_achieved,
+            'subgoals/place': self.place_sub_goals_achieved,
+        })
+
+        # Check for episode termination
         done = info['goal_reached']
-        # print("PnPEnv: {}/{}".format(info['distance'], self.distance_threshold))
+        success = int(done)
 
         if render:
             self.render()
 
         achieved_goal = self.transform_to_goal_space(next_obs)
         desired_goal = self.current_goal
-        success = int(done)
         return next_obs.astype(np.float32), achieved_goal.astype(np.float32), desired_goal.astype(np.float32), \
             np.array(success, np.int32), info['distance'].astype(np.float32)
 
@@ -225,3 +240,61 @@ class MyPnPEnvWrapper(object):
 
     def set_feasible_hand(self, _bool):
         self.feasible_hand = _bool
+
+    def reset_subgoals_achieved_indicators(self):
+
+        self.pick_sub_goals_achieved: Dict[int, bool] = {
+            i: False for i in range(self.num_objs)
+        }
+        self.place_sub_goals_achieved: Dict[int, bool] = {
+            i: False for i in range(self.num_objs)
+        }
+        self.place_sub_goals_distances: Dict[int, float] = {
+            i: np.inf for i in range(self.num_objs)
+        }
+
+    def check_for_subgoals(self, next_obs):
+        # First check if any pick subgoal is not achieved
+        if False in self.pick_sub_goals_achieved:
+            gripper_pos = next_obs[:3]
+            unpicked_objects = [key for key, value in self.pick_sub_goals_achieved.items() if value is False]
+            for obj in unpicked_objects:
+                obj_pos = next_obs[3 + 3 * obj:6 + 3 * obj]
+                if np.linalg.norm(gripper_pos - obj_pos) < self.distance_threshold:
+                    self.pick_sub_goals_achieved[obj] = True
+
+        # Then check if any place subgoal is not achieved
+        if False in self.place_sub_goals_achieved:
+            unplaced_objects = [key for key, value in self.place_sub_goals_achieved.items() if value is False]
+            for obj in unplaced_objects:
+                obj_pos = next_obs[3 + 3 * obj:6 + 3 * obj]
+                goal_pos = self.current_goal[3 * obj: 3 + 3 * obj]
+                if np.linalg.norm(obj_pos - goal_pos) < self.distance_threshold:
+                    self.place_sub_goals_achieved[obj] = True
+
+        # Update distances
+        for obj in range(self.num_objs):
+            obj_pos = next_obs[3 + 3 * obj:6 + 3 * obj]
+            goal_pos = self.current_goal[3 * obj: 3 + 3 * obj]
+            self.place_sub_goals_distances[obj] = np.linalg.norm(obj_pos - goal_pos)
+
+    def get_subgoal_info(self) -> Tuple[Dict[str, int], Dict[str, float]]:
+        """
+        :return: a dictionary of subgoal info i.e. sub goal name and whether it is achieved along with distances in each
+        """
+        subgoal_info = {}
+        for key, value in self.pick_sub_goals_achieved.items():
+            subgoal_info['subgoals/pick/{}'.format(key)] = int(value)
+
+        for key, value in self.place_sub_goals_achieved.items():
+            subgoal_info['subgoals/place/{}'.format(key)] = int(value)
+            if value:
+                # Good Hack: if place subgoal is achieved, pick subgoal is also achieved
+                subgoal_info['subgoals/pick/{}'.format(key)] = int(True)
+
+        subgoal_distances = {}
+        for key, value in self.place_sub_goals_distances.items():
+            subgoal_distances['subgoals/place/{}'.format(key)] = value
+
+        return subgoal_info, subgoal_distances
+

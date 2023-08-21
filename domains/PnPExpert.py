@@ -1331,18 +1331,29 @@ class PnPExpertMultiObjImitator:
                 curr_skill = prev_skill
 
         # Cond3: If previous skill was drop object (for any object except the last object)
-        elif np.argmax(prev_skill) in drop_idxs[:-1]:
-            # If gripper is not close to goal, then keep dropping object else transition to pick object
-            if np.linalg.norm(delta_goals[obj_of_interest]) < 0.01:
-                # Transition to pick of next object
-                curr_skill[(obj_of_interest + 1) * 3] = 1
-            else:
+        elif np.argmax(prev_skill) in drop_idxs:
+
+            # Check if all goals are achieved
+            goals_achieved = [np.linalg.norm(delta_goals[i]) < 0.01 for i in range(self.num_objects)]
+
+            if all(goals_achieved) or np.linalg.norm(delta_goals[obj_of_interest]) >= 0.01:
+                # Stay in drop skill for last dropped object (if all goals are achieved) or
+                # if gripper is not close to goal, then keep dropping object
                 curr_skill = prev_skill
 
-        # Cond4: If previous skill was drop object (for the last object)
-        else:
-            # Stay in drop skill
-            curr_skill = prev_skill
+            else:
+                # # IMP: For self-correction
+                # Identify the object index (in order) whose goal is not achieved i.e. False in goals_achieved
+                obj_of_interest = goals_achieved.index(False)
+                # Transition to its pick
+                curr_skill[obj_of_interest * 3] = 1
+
+            # # If gripper is not close to goal, then keep dropping object else transition to pick object
+            # if np.linalg.norm(delta_goals[obj_of_interest]) < 0.01:
+            #     # Transition to pick of next object
+            #     curr_skill[(obj_of_interest + 1) * 3] = 1
+            # else:
+            #     curr_skill = prev_skill
 
         return np.cast[np.float32](curr_skill)
 
