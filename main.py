@@ -46,7 +46,7 @@ Agents = {
 }
 
 
-def record(algo: str, root_dir):
+def record(algo: str, path_to_models: str, num_record_demos: int = 2):
 	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 	
 	# Set the random seeds randomly for more randomness
@@ -80,7 +80,7 @@ def record(algo: str, root_dir):
 	
 	# List Model Directories
 	model_dirs = []
-	for root, dirs, files in os.walk(root_dir):
+	for root, dirs, files in os.walk(path_to_models):
 		for name in dirs:
 			if 'run' in name:
 				model_dirs.append(os.path.join(root, name, 'models'))
@@ -111,13 +111,13 @@ def record(algo: str, root_dir):
 		agent.record(
 			use_expert_options=False,
 			use_expert_action=False,
-			num_episodes=2,
+			num_episodes=num_record_demos,
 		)
 		
 		break
 
 
-def verify(algo: str):
+def verify(algo: str, path_to_models: str, num_test_demos: int=5):
 	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 	
 	# Set the random seeds randomly for more randomness
@@ -150,7 +150,7 @@ def verify(algo: str):
 	
 	# List Model Directories
 	model_dirs = []
-	for root, dirs, files in os.walk('./logging/offlineILPnPOneExp/SkilledDemoDICE_full'):
+	for root, dirs, files in os.walk(path_to_models):
 		for name in dirs:
 			if 'run' in name:
 				model_dirs.append(os.path.join(root, name, 'models'))
@@ -186,11 +186,11 @@ def verify(algo: str):
 			use_expert_options=False,
 			use_expert_action=False,
 			resume_states=None,
-			num_episodes=5,
+			num_episodes=num_test_demos,
 		)
 
 
-def evaluate(algo: str, num_eval_demos=100, eval_with_expert_assist: bool = False):
+def evaluate(algo: str, path_to_models: str, num_eval_demos=100, eval_with_expert_assist: bool = False):
 	current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 	
 	# Set the random seeds randomly for more randomness
@@ -229,7 +229,7 @@ def evaluate(algo: str, num_eval_demos=100, eval_with_expert_assist: bool = Fals
 	
 	# List Model Directories
 	model_dirs = []
-	for root, dirs, files in os.walk('./logging/offlineILPnPTwoExp/GODICE_none(0.25)_6'):
+	for root, dirs, files in os.walk(path_to_models):
 		for name in dirs:
 			if 'run' in name:
 				model_dirs.append(os.path.join(root, name, 'models'))

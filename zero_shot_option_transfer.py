@@ -177,7 +177,7 @@ class Agent(AgentBase):
 		super().__init__(args, zeroShotGODICE(args), 'skilledDemoDICE', expert_buffer, offline_buffer)
 
 
-def main():
+def main(one_obj_path_to_src_models: str, multi_obj_path_to_trg_models: str):
 	tf.config.run_functions_eagerly(False)
 	args = get_DICE_args(log_dir, log_dir=log_dir, debug=False)
 	
@@ -194,13 +194,13 @@ def main():
 	
 	# List Model Directories
 	one_obj_model_dirs = []
-	for root, dirs, files in os.walk('./logging/offlineILPnPOneExp/GODICE_semi'):
+	for root, dirs, files in os.walk(one_obj_path_to_src_models):
 		for name in dirs:
 			if 'run' in name:
 				one_obj_model_dirs.append(os.path.join(root, name, 'models'))
 	
 	n_obj_model_dirs = []
-	for root, dirs, files in os.walk('./logging/offlineILPnPTwoExp/GODICE_semi(0.25)_6'):
+	for root, dirs, files in os.walk(multi_obj_path_to_trg_models):
 		for name in dirs:
 			if 'run' in name:
 				n_obj_model_dirs.append(os.path.join(root, name, 'models'))
@@ -236,8 +236,9 @@ def main():
 		np.std(multi_model_returns))
 	)
 	
-		
-
 
 if __name__ == "__main__":
-	main()
+	main(
+		one_obj_path_to_src_models = './logging/offlineILPnPOneExp/GODICE_semi',
+		multi_obj_path_to_trg_models = './logging/offlineILPnPTwoExp/GODICE_semi(0.25)_6'
+	)
