@@ -14,6 +14,8 @@ def get_buffer_shape(args) -> Dict[str, Tuple[int, ...]]:
         'actions': (args.horizon, args.a_dim),
         'successes': (args.horizon,),
         'distances': (args.horizon,),
+        'has_gt_skill': (args.horizon,),
+        'skill_dec_confidence': (args.horizon,),
     }
     return buffer_shape
 

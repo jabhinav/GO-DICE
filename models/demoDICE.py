@@ -188,6 +188,13 @@ class DemoDICE(tf.keras.Model, ABC):
 			action_dev = tf.random.normal(action_mu.shape, mean=0.0, stddev=stddev)
 			action = action_mu + action_dev  # Add noise to action
 			action = tf.clip_by_value(action, -self.args.action_max, self.args.action_max)
+			
+		# Safety check for action, should not be nan or inf
+		has_nan = tf.math.reduce_any(tf.math.is_nan(action))
+		has_inf = tf.math.reduce_any(tf.math.is_inf(action))
+		if has_nan or has_inf:
+			logger.warning('Action has nan or inf. Setting action to zero. Action: {}'.format(action))
+			action = tf.zeros_like(action)
 		
 		return curr_goal, curr_skill, action
 	
@@ -243,8 +250,8 @@ class DemoDICE(tf.keras.Model, ABC):
 
 class Agent(AgentBase):
 	def __init__(self, args,
-				 expert_buffer: ReplayBufferTf,
-				 offline_buffer: ReplayBufferTf):
+				 expert_buffer: ReplayBufferTf = None,
+				 offline_buffer: ReplayBufferTf = None):
 		
 		super().__init__(args, DemoDICE(args), 'demoDICE', expert_buffer, offline_buffer)
 	
@@ -304,4 +311,4 @@ class Agent(AgentBase):
 		self.save_model(args.dir_param)
 		
 		if args.test_demos > 0:
-			self.visualise(use_expert_skill=False)
+			self.visualise(use_expert_options=False)

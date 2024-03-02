@@ -51,6 +51,7 @@ class FetchEnv(robot_env.RobotEnv):
         self.reward_type = reward_type
 
         self.stacking = stacking
+        self.stack_height_offset = 0.05  # TODO: figure out if it's .025 or .05 (0.025 not working, goals too close)
         self.first_in_place = first_in_place
         
         print("Model path: ", model_path)
@@ -106,20 +107,21 @@ class FetchEnv(robot_env.RobotEnv):
             object1_pos = self.sim.data.get_site_xpos('object0')
             object2_pos = self.sim.data.get_site_xpos('object1')
             # rotations
-            object_rot = rotations.mat2euler(self.sim.data.get_site_xmat('object0'))
-            object_rot1 = rotations.mat2euler(self.sim.data.get_site_xmat('object1'))
+            object1_rot = rotations.mat2euler(self.sim.data.get_site_xmat('object0'))
+            object2_rot = rotations.mat2euler(self.sim.data.get_site_xmat('object1'))
             # velocities
             object1_velp = self.sim.data.get_site_xvelp('object0') * dt
-            object_velr = self.sim.data.get_site_xvelr('object0') * dt
+            object1_velr = self.sim.data.get_site_xvelr('object0') * dt
             object2_velp = self.sim.data.get_site_xvelp('object1') * dt
-            object_velr1 = self.sim.data.get_site_xvelr('object1') * dt
+            object2_velr = self.sim.data.get_site_xvelr('object1') * dt
             # gripper state
             object1_rel_pos = object1_pos - grip_pos
             object1_velp -= grip_velp
             object2_rel_pos = object2_pos - grip_pos
             object2_velp -= grip_velp
         else:
-            object1_pos = object_rot = object1_velp = object_velr = object1_rel_pos = np.zeros(0)
+            object1_pos = object1_rot = object1_velp = object1_velr = object1_rel_pos = np.zeros(0)
+            object2_pos = object2_rot = object2_velp = object2_velr = object2_rel_pos = np.zeros(0)
         gripper_state = robot_qpos[-2:]
         gripper_vel = robot_qvel[-2:] * dt  # change to a scalar if the gripper is made symmetric
 
@@ -129,7 +131,9 @@ class FetchEnv(robot_env.RobotEnv):
             achieved_goal = np.concatenate([np.squeeze(object1_pos.copy()), np.squeeze(object2_pos.copy())])
         obs = np.concatenate([
             grip_pos, object1_pos.ravel(), object2_pos.ravel(), object1_rel_pos.ravel(), object2_rel_pos.ravel(),
-            gripper_state, object_rot.ravel(), object1_velp.ravel(), object_velr.ravel(), grip_velp, gripper_vel,
+            gripper_state, object1_rot.ravel(), object1_velp.ravel(), object1_velr.ravel(),
+            object2_rot.ravel(), object2_velp.ravel(), object2_velr.ravel(),
+            grip_velp, gripper_vel,
         ])
 
         return {
@@ -247,11 +251,17 @@ class FetchEnv(robot_env.RobotEnv):
             # [HERE] Set goals for stacking
             else:
                 goal1 = np.copy(goal0)
-                goal1[2] = goal0[2] + 0.05  # TODO: figure out if it's .025 or .05 (0.025 not working, goals too close)
+                goal1[2] = goal0[2] + self.stack_height_offset
 
             goal = np.concatenate([goal0, goal1])
         else:
-            goal = self.initial_gripper_xpos[:3] + self.np_random.uniform(-0.15, 0.15, size=3)
+            goal0 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+                -self.target_range, self.target_range, size=3
+            )
+            goal1 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+                -self.target_range, self.target_range, size=3
+            )
+            goal = np.concatenate([goal0, goal1])
         
         return goal.copy()
 

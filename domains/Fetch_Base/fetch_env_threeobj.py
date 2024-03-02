@@ -50,6 +50,7 @@ class FetchEnv(robot_env.RobotEnv):
 		self.reward_type = reward_type
 		
 		self.stacking = stacking
+		self.stack_height_offset = 0.05  # TODO: figure out if it's .025 or .05 (0.025 not working, goals too close)
 		self.first_in_place = first_in_place
 		
 		super(FetchEnv, self).__init__(
@@ -104,16 +105,16 @@ class FetchEnv(robot_env.RobotEnv):
 			object2_pos = self.sim.data.get_site_xpos('object1')
 			object3_pos = self.sim.data.get_site_xpos('object2')
 			# rotations
-			object_rot = rotations.mat2euler(self.sim.data.get_site_xmat('object0'))
-			object_rot1 = rotations.mat2euler(self.sim.data.get_site_xmat('object1'))
-			object_rot2 = rotations.mat2euler(self.sim.data.get_site_xmat('object2'))
+			object1_rot = rotations.mat2euler(self.sim.data.get_site_xmat('object0'))
+			object2_rot = rotations.mat2euler(self.sim.data.get_site_xmat('object1'))
+			object3_rot = rotations.mat2euler(self.sim.data.get_site_xmat('object2'))
 			# velocities
 			object1_velp = self.sim.data.get_site_xvelp('object0') * dt
-			object_velr = self.sim.data.get_site_xvelr('object0') * dt
+			object1_velr = self.sim.data.get_site_xvelr('object0') * dt
 			object2_velp = self.sim.data.get_site_xvelp('object1') * dt
-			object_velr1 = self.sim.data.get_site_xvelr('object1') * dt
+			object2_velr = self.sim.data.get_site_xvelr('object1') * dt
 			object3_velp = self.sim.data.get_site_xvelp('object2') * dt
-			object_velr2 = self.sim.data.get_site_xvelr('object2') * dt
+			object3_velr = self.sim.data.get_site_xvelr('object2') * dt
 			# gripper state
 			object1_rel_pos = object1_pos - grip_pos
 			object1_velp -= grip_velp
@@ -122,7 +123,9 @@ class FetchEnv(robot_env.RobotEnv):
 			object3_rel_pos = object3_pos - grip_pos
 			object3_velp -= grip_velp
 		else:
-			object1_pos = object_rot = object1_velp = object_velr = object1_rel_pos = np.zeros(0)
+			object1_pos = object1_rot = object1_velp = object1_velr = object1_rel_pos = np.zeros(0)
+			object2_pos = object2_rot = object2_velp = object2_velr = object2_rel_pos = np.zeros(0)
+			object3_pos = object3_rot = object3_velp = object3_velr = object3_rel_pos = np.zeros(0)
 		gripper_state = robot_qpos[-2:]
 		gripper_vel = robot_qvel[-2:] * dt  # change to a scalar if the gripper is made symmetric
 		
@@ -135,7 +138,10 @@ class FetchEnv(robot_env.RobotEnv):
 		obs = np.concatenate([
 			grip_pos, object1_pos.ravel(), object2_pos.ravel(), object3_pos.ravel(),
 			object1_rel_pos.ravel(), object2_rel_pos.ravel(), object3_rel_pos.ravel(),
-			gripper_state, object_rot.ravel(), object1_velp.ravel(), object_velr.ravel(), grip_velp, gripper_vel,
+			gripper_state, object1_rot.ravel(), object1_velp.ravel(), object1_velr.ravel(),
+			object2_rot.ravel(), object2_velp.ravel(), object2_velr.ravel(),
+			object3_rot.ravel(), object3_velp.ravel(), object3_velr.ravel(),
+			grip_velp, gripper_vel,
 		])
 		
 		return {
@@ -170,15 +176,26 @@ class FetchEnv(robot_env.RobotEnv):
 		# Randomize start position of the objects.
 		if self.has_object:
 			object_xpos = object_xpos1 = object_xpos2 = self.initial_gripper_xpos[:2]
-			while np.linalg.norm(object_xpos - self.initial_gripper_xpos[:2]) < 0.1 \
-					or np.linalg.norm(object_xpos1 - self.initial_gripper_xpos[:2]) < 0.1 \
-					or np.linalg.norm(object_xpos2 - self.initial_gripper_xpos[:2]) < 0.1:
-				object_xpos = self.initial_gripper_xpos[:2] + self.np_random.uniform(-self.obj_range, self.obj_range,
-																					 size=2)
-				object_xpos1 = self.initial_gripper_xpos[:2] + self.np_random.uniform(-self.obj_range, self.obj_range,
-																					  size=2)
-				object_xpos2 = self.initial_gripper_xpos[:2] + self.np_random.uniform(-self.obj_range, self.obj_range,
-																					  size=2)
+			
+			# New Logic: Randomize the object position with following constraints:
+			# 1. Object should be at least obj_range from the gripper
+			# 2. Object should not be at least obj_range from any other object
+			
+			# Let first object be at initial gripper position
+			# (for some reason, randomising it is putting it out of the table)
+			
+			while np.linalg.norm(object_xpos1 - self.initial_gripper_xpos[:2]) < 0.1 or \
+					np.linalg.norm(object_xpos1 - object_xpos) < 0.1:
+				object_xpos1 = self.initial_gripper_xpos[:2] + self.np_random.uniform(
+					-self.obj_range, self.obj_range, size=2
+				)
+			
+			while np.linalg.norm(object_xpos2 - self.initial_gripper_xpos[:2]) < 0.1 or \
+					np.linalg.norm(object_xpos2 - object_xpos) < 0.1 or \
+					np.linalg.norm(object_xpos2 - object_xpos1) < 0.1:
+				object_xpos2 = self.initial_gripper_xpos[:2] + self.np_random.uniform(
+					-self.obj_range, self.obj_range, size=2
+				)
 			object_qpos = self.sim.data.get_joint_qpos('object0:joint')
 			object_qpos1 = self.sim.data.get_joint_qpos('object1:joint')
 			object_qpos2 = self.sim.data.get_joint_qpos('object2:joint')
@@ -235,8 +252,9 @@ class FetchEnv(robot_env.RobotEnv):
 				goal0[2] = self.height_offset
 				
 				# ---------------- Cond 1: To make goal0 sufficiently far from objects --------------------------------
-				while np.linalg.norm(goal0 - object_qpos) < 0.1 or np.linalg.norm(goal0 - object_qpos1) < 0.1 \
-						or np.linalg.norm(goal0 - object_qpos2) < 0.1:
+				while np.linalg.norm(goal0[:2] - object_qpos[:2]) < 0.1 \
+						or np.linalg.norm(goal0[:2] - object_qpos1[:2]) < 0.1 \
+						or np.linalg.norm(goal0[:2] - object_qpos2[:2]) < 0.1:
 					# print("Cond1: resampling the goal0")
 					goal0 = self.initial_gripper_xpos[:3] + self.np_random.uniform(-self.target_range,
 																				   self.target_range,
@@ -298,13 +316,22 @@ class FetchEnv(robot_env.RobotEnv):
 			# [HERE] Set goals for stacking
 			else:
 				goal1 = np.copy(goal0)
-				goal1[2] = goal0[2] + 0.05
+				goal1[2] = goal0[2] + self.stack_height_offset
 				goal2 = np.copy(goal1)
-				goal2[2] = goal1[2] + 0.05
+				goal2[2] = goal1[2] + self.stack_height_offset
 			
 			goal = np.concatenate([goal0, goal1, goal2])
 		else:
-			goal = self.initial_gripper_xpos[:3] + self.np_random.uniform(-0.15, 0.15, size=3)
+			goal0 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+				-self.target_range, self.target_range, size=3
+			)
+			goal1 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+				-self.target_range, self.target_range, size=3
+			)
+			goal2 = self.initial_gripper_xpos[:3] + self.np_random.uniform(
+				-self.target_range, self.target_range, size=3
+			)
+			goal = np.concatenate([goal0, goal1, goal2])
 		
 		return goal.copy()
 	

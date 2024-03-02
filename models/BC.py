@@ -52,23 +52,33 @@ class BC(tf.keras.Model, ABC):
 		# For HER
 		self.use_her = False
 		logger.info('[[[ Using HER ? ]]]: {}'.format(self.use_her))
+		
+		# Beta
+		self.beta = self.args.BC_beta
 	
 	@tf.function(experimental_relax_shapes=True)
 	def train(self, data_exp, data_rb):
 		with tf.GradientTape(watch_accessed_variables=False, persistent=True) as tape:
 			tape.watch(self.actor.variables)
 			
+			# On Offline Data
 			actions_mu, _, _ = self.actor(tf.concat([data_rb['states'], data_rb['goals']], axis=1))
-			pi_loss = tf.reduce_sum(tf.math.squared_difference(data_rb['actions'], actions_mu), axis=-1)
-			pi_loss = tf.reduce_mean(pi_loss)
+			pi_loss_offline = tf.reduce_sum(tf.math.squared_difference(data_rb['actions'], actions_mu), axis=-1)
+			pi_loss_offline = tf.reduce_mean(pi_loss_offline)
+			
+			# On Expert Data
+			actions_mu, _, _ = self.actor(tf.concat([data_exp['states'], data_exp['goals']], axis=1))
+			pi_loss_expert = tf.reduce_sum(tf.math.squared_difference(data_exp['actions'], actions_mu), axis=-1)
+			pi_loss_expert = tf.reduce_mean(pi_loss_expert)
+			
 			penalty = orthogonal_regularization(self.actor.base)
-			pi_loss_w_penalty = pi_loss + penalty
+			pi_loss_w_penalty = self.beta * pi_loss_offline + (1 - self.beta) * pi_loss_expert + penalty
 		
 		grads = tape.gradient(pi_loss_w_penalty, self.actor.trainable_variables)
 		self.actor_optimizer.apply_gradients(zip(grads, self.actor.trainable_variables))
 		
 		return {
-			'loss/pi': pi_loss,
+			'loss/pi': pi_loss_offline,
 			'penalty/pi_ortho_penalty': penalty,
 		}
 	
@@ -93,6 +103,13 @@ class BC(tf.keras.Model, ABC):
 			action_dev = tf.random.normal(action_mu.shape, mean=0.0, stddev=stddev)
 			action = action_mu + action_dev  # Add noise to action
 			action = tf.clip_by_value(action, -self.args.action_max, self.args.action_max)
+			
+		# Safety check for action, should not be nan or inf
+		has_nan = tf.math.reduce_any(tf.math.is_nan(action))
+		has_inf = tf.math.reduce_any(tf.math.is_inf(action))
+		if has_nan or has_inf:
+			logger.warning('Action has nan or inf. Setting action to zero. Action: {}'.format(action))
+			action = tf.zeros_like(action)
 		
 		return curr_goal, curr_skill, action
 	
@@ -201,4 +218,4 @@ class Agent(AgentBase):
 		self.save_model(args.dir_param)
 		
 		if args.test_demos > 0:
-			self.visualise(use_expert_skill=False)
+			self.visualise(use_expert_options=False)
