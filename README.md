@@ -43,7 +43,7 @@ python -c "import tensorflow as tf;print(tf.reduce_sum(tf.random.normal([1000, 1
 pip install -r requirements.txt
 ```
 
-Note: The `latest` branch uses `gymansium` and `mujoco` for the environments. The `dev` branch uses `gym` and `mujoco-py` for the environments.
+Note: This branch uses `gymansium` and `mujoco` for the environments. The `dev` branch uses `gym` and `mujoco-py` for the environments.
 
 ## Resources
 
